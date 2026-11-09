@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2011,6 +2012,39 @@ def test_deepseek_no_backfill_when_reasoning_effort_none_string() -> None:
     )
     assistant = kw["messages"][1]
     assert "reasoning_content" not in assistant
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_id,extra_body", [
+    (None, {}),
+    ("", {}),
+    ("webui:缓存会话", {}),
+    ("webui:缓存会话", {"prompt_cache_key": "explicit-cache-key"}),
+])
+async def test_responses_prompt_cache_key(
+    session_id: str | None, extra_body: dict,
+) -> None:
+    mock_responses = AsyncMock(return_value=_fake_responses_response())
+    context = ProviderCallContext(session_id=session_id) if session_id is not None else None
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI") as mock_client:
+        mock_client.return_value.responses.create = mock_responses
+        provider = OpenAICompatProvider(
+            api_key="sk-test", default_model="gpt-5", spec=find_by_name("openai"),
+            extra_body=extra_body,
+        )
+        result = await provider.chat(
+            messages=[{"role": "user", "content": "hi"}], provider_context=context,
+        )
+
+    assert result.content == "ok"
+    mock_responses.assert_awaited_once()
+    body = mock_responses.call_args.kwargs
+    if not session_id:
+        assert "prompt_cache_key" not in body
+    else:
+        assert body["prompt_cache_key"] == extra_body.get(
+            "prompt_cache_key", hashlib.sha256(session_id.encode("utf-8")).hexdigest(),
+        )
 
 
 @pytest.mark.asyncio

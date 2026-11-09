@@ -1198,6 +1198,11 @@ class OpenAICompatProvider(LLMProvider):
         if prepared.replayed and "gpt-5.6" in model_name.lower():
             body.setdefault("reasoning", {})["context"] = "all_turns"
 
+        if provider_context and provider_context.session_id:
+            body["prompt_cache_key"] = hashlib.sha256(
+                provider_context.session_id.encode("utf-8")
+            ).hexdigest()
+
         extra_body = getattr(self, "_extra_body", {})
         if extra_body:
             body = _merge_responses_extra_body(body, extra_body)
