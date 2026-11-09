@@ -1,0 +1,85 @@
+name: Fork build
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 构建并校验安装包
+    if: github.repository == 'Jielumoon/nanobot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.13'
+      - name: 构建包含 WebUI 的 wheel
+        run: uv build --wheel --out-dir dist
+      - name: 校验源码提交与完整 WebUI 资产
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          import tempfile
+          import zipfile
+          from pathlib import Path
+
+          from scripts.verify_installed_release import webui_assets
+
+          wheel, = Path("dist").glob("*.whl")
+          with zipfile.ZipFile(wheel) as archive:
+              commit = archive.read("nanobot/_build_commit.txt").decode().strip()
+              assert commit == os.environ["EXPECTED_COMMIT"], f"源码提交不匹配：{commit}"
+              with tempfile.TemporaryDirectory() as directory:
+                  archive.extractall(directory)
+                  assets = webui_assets(Path(directory) / "nanobot/webui/dist")
+          print(f"已校验 {wheel.name}：源码提交 {commit}，WebUI 资产 {len(assets)} 个")
+          PY
+          cd dist
+          sha256sum *.whl > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fork-package
+          path: |
+            dist/*.whl
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    name: 发布按提交标识的预发布版本
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fork-package
+          path: dist
+      - name: 校验下载的安装包
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: 发布 Fork Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "fork-${SOURCE_COMMIT}" dist/*.whl dist/SHA256SUMS \
+            --target "$SOURCE_COMMIT" \
+            --title "Fork build ${SOURCE_COMMIT}" \
+            --prerelease --latest=false \
+            --notes "源码提交：${SOURCE_COMMIT}。包含 WebUI，不内置原生 TUI。仅供手动安装，不属于官方签名更新源。安装包沿用源码版本号；同版本更新需显式重装，并核验安装后的源码提交。下载后使用 SHA256SUMS 校验文件完整性。"
