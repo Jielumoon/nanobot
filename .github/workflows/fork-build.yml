@@ -44,7 +44,7 @@ jobs:
               assert commit == os.environ["EXPECTED_COMMIT"], f"源码提交不匹配：{commit}"
               with tempfile.TemporaryDirectory() as directory:
                   archive.extractall(directory)
-                  assets = webui_assets(Path(directory) / "nanobot/webui/dist")
+                  assets = webui_assets(Path(directory) / "nanobot/web/dist")
           print(f"已校验 {wheel.name}：源码提交 {commit}，WebUI 资产 {len(assets)} 个")
           PY
           cd dist
