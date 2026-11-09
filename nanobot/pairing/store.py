@@ -328,18 +328,18 @@ def get_approved(channel: str) -> list[str]:
 def format_pairing_reply(code: str) -> str:
     """Return the pairing-code message sent to unrecognised DM senders."""
     return (
-        "Hi! This is your private nanobot.\n\n"
-        f"Your pairing code is: `{code}`\n\n"
-        "Open the nanobot WebUI and enter this code to pair your chat account.\n"
-        f"Without the WebUI, approve it from an already paired chat with "
-        f"`/pairing approve {code}`."
+        "你好！这是你的私人 nanobot。\n\n"
+        f"你的配对码是：`{code}`\n\n"
+        "打开 nanobot WebUI，输入此配对码以绑定聊天账号。\n"
+        f"不使用 WebUI 时，可在已配对的聊天中执行 "
+        f"`/pairing approve {code}` 批准配对。"
     )
 
 
 def format_expiry(expires_at: float) -> str:
-    """Return a human-readable expiry string (e.g. ``"120s"`` or ``"expired"``)."""
+    """Return a human-readable expiry string (e.g. ``"120s"`` or ``"已过期"``)."""
     remaining = int(expires_at - time.time())
-    return f"{remaining}s" if remaining > 0 else "expired"
+    return f"{remaining}s" if remaining > 0 else "已过期"
 
 
 def handle_pairing_command(
@@ -355,7 +355,7 @@ def handle_pairing_command(
     except OSError:
         # Mutations fail loudly on a transient I/O error instead of lying
         # ("invalid code") or silently rewriting the store from an empty view.
-        return "The pairing store is temporarily unavailable. Please try again."
+        return "配对数据暂不可用，请稍后重试。"
 
 
 def _handle_pairing_subcommand(
@@ -368,8 +368,8 @@ def _handle_pairing_subcommand(
     if sub in ("list",):
         pending = list_pending()
         if not pending:
-            return "No pending pairing requests."
-        lines = ["Pending pairing requests:"]
+            return "暂无待处理的配对请求。"
+        lines = ["待处理的配对请求："]
         for item in pending:
             expiry = format_expiry(item.get("expires_at", 0))
             lines.append(
@@ -379,36 +379,36 @@ def _handle_pairing_subcommand(
 
     elif sub == "approve":
         if arg is None:
-            return "Usage: `/pairing approve <code>`"
+            return "用法：`/pairing approve <code>`"
         result = approve_code(arg, on_change=on_change)
         if result is None:
-            return f"Invalid or expired pairing code: `{arg}`"
+            return f"配对码无效或已过期：`{arg}`"
         ch, sid = result
-        return f"Approved pairing code `{arg}` — {sid} can now access {ch}"
+        return f"已批准配对码 `{arg}` — {sid} 现在可以访问 {ch}"
 
     elif sub == "deny":
         if arg is None:
-            return "Usage: `/pairing deny <code>`"
+            return "用法：`/pairing deny <code>`"
         if deny_code(arg, on_change=on_change):
-            return f"Denied pairing code `{arg}`"
-        return f"Pairing code `{arg}` not found or already expired"
+            return f"已拒绝配对码 `{arg}`"
+        return f"配对码 `{arg}` 不存在或已过期"
 
     elif sub == "revoke":
         if len(parts) == 2:
             return (
-                f"Revoked {arg} from {channel}"
+                f"已撤销 {arg} 在 {channel} 的授权"
                 if revoke(channel, parts[1], on_change=on_change)
-                else f"{arg} was not in the approved list for {channel}"
+                else f"{arg} 不在 {channel} 的已授权列表中"
             )
         if len(parts) == 3:
             return (
-                f"Revoked {parts[2]} from {arg}"
+                f"已撤销 {parts[2]} 在 {arg} 的授权"
                 if revoke(parts[1], parts[2], on_change=on_change)
-                else f"{parts[2]} was not in the approved list for {arg}"
+                else f"{parts[2]} 不在 {arg} 的已授权列表中"
             )
-        return "Usage: `/pairing revoke <user_id>` or `/pairing revoke <channel> <user_id>`"
+        return "用法：`/pairing revoke <user_id>` 或 `/pairing revoke <channel> <user_id>`"
 
     return (
-        "Unknown pairing command.\n"
-        "Usage: `/pairing [list|approve <code>|deny <code>|revoke <user_id>|revoke <channel> <user_id>]`"
+        "未知配对命令。\n"
+        "用法：`/pairing [list|approve <code>|deny <code>|revoke <user_id>|revoke <channel> <user_id>]`"
     )

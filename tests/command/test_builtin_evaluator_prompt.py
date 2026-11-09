@@ -21,7 +21,7 @@ def _make_ctx(tmp_path, raw: str = "/evaluator-prompt", args: str = "") -> Comma
 async def test_evaluator_prompt_reports_default_prompt(tmp_path) -> None:
     out = await cmd_evaluator_prompt(_make_ctx(tmp_path))
 
-    assert "Heartbeat evaluator prompt: nanobot default" in out.content
+    assert "心跳通知审核提示词：nanobot 默认" in out.content
     assert "prompts/evaluator.md" in out.content
     assert str(tmp_path) not in out.content
     assert "/evaluator-prompt init" in out.content
@@ -34,7 +34,7 @@ async def test_evaluator_prompt_init_copies_default_prompt(tmp_path) -> None:
     out = await cmd_evaluator_prompt(ctx)
 
     prompt_file = tmp_path / "prompts" / "evaluator.md"
-    assert "Created heartbeat evaluator prompt" in out.content
+    assert "已创建心跳通知审核提示词文件" in out.content
     assert "prompts/evaluator.md" in out.content
     assert str(tmp_path) not in out.content
     assert "evaluate_notification" in out.content
@@ -50,7 +50,7 @@ async def test_evaluator_prompt_init_does_not_overwrite_existing_prompt(tmp_path
 
     out = await cmd_evaluator_prompt(ctx)
 
-    assert "already exists" in out.content
+    assert "已存在" in out.content
     assert "prompts/evaluator.md" in out.content
     assert str(tmp_path) not in out.content
     assert prompt_file.read_text(encoding="utf-8") == "custom"
@@ -68,8 +68,8 @@ async def test_evaluator_prompt_handles_undecodable_existing_prompt(tmp_path) ->
         _make_ctx(tmp_path, "/evaluator-prompt init", "init")
     )
 
-    assert "Heartbeat evaluator prompt: nanobot default" in status.content
-    assert "already exists" in init.content
+    assert "心跳通知审核提示词：nanobot 默认" in status.content
+    assert "已存在" in init.content
     assert prompt_file.read_bytes() == original
 
 
@@ -82,7 +82,7 @@ async def test_evaluator_prompt_init_recreates_empty_prompt(tmp_path) -> None:
 
     out = await cmd_evaluator_prompt(ctx)
 
-    assert "Created heartbeat evaluator prompt" in out.content
+    assert "已创建心跳通知审核提示词文件" in out.content
     assert prompt_file.read_text(encoding="utf-8") == default_evaluator_prompt() + "\n"
 
 
@@ -94,7 +94,7 @@ async def test_evaluator_prompt_reports_override(tmp_path) -> None:
 
     out = await cmd_evaluator_prompt(_make_ctx(tmp_path))
 
-    assert "Heartbeat evaluator prompt: custom for this workspace" in out.content
+    assert "心跳通知审核提示词：当前工作区自定义" in out.content
     assert "prompts/evaluator.md" in out.content
 
 
@@ -102,7 +102,7 @@ async def test_evaluator_prompt_reports_override(tmp_path) -> None:
 async def test_evaluator_prompt_rejects_unknown_args(tmp_path) -> None:
     out = await cmd_evaluator_prompt(_make_ctx(tmp_path, "/evaluator-prompt nope", "nope"))
 
-    assert out.content == "Usage: /evaluator-prompt [init]"
+    assert out.content == "用法：/evaluator-prompt [init]"
 
 
 def test_evaluator_prompt_command_in_help_and_palette() -> None:

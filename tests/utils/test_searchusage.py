@@ -18,14 +18,14 @@ class TestSearchUsageInfoFormat:
         info = SearchUsageInfo(provider="duckduckgo", supported=False)
         text = info.format()
         assert "duckduckgo" in text
-        assert "not available" in text
+        assert "此服务不支持" in text
 
     def test_supported_with_error(self):
         info = SearchUsageInfo(provider="tavily", supported=True, error="HTTP 401")
         text = info.format()
         assert "tavily" in text
         assert "HTTP 401" in text
-        assert "unavailable" in text
+        assert "暂不可用" in text
 
     def test_full_tavily_usage(self):
         info = SearchUsageInfo(
@@ -44,28 +44,28 @@ class TestSearchUsageInfoFormat:
         assert "142 / 1000" in text
         assert "858" in text
         assert "2026-05-01" in text
-        assert "Search: 120" in text
-        assert "Extract: 15" in text
-        assert "Crawl: 7" in text
+        assert "搜索：120" in text
+        assert "提取：15" in text
+        assert "抓取：7" in text
 
     def test_usage_without_limit(self):
         info = SearchUsageInfo(provider="tavily", supported=True, used=50)
         text = info.format()
-        assert "50 requests" in text
-        assert "/" not in text.split("Usage:")[1].split("\n")[0]
+        assert "50 次请求" in text
+        assert "/" not in text.split("用量：")[1].split("\n")[0]
 
     def test_no_breakdown_when_none(self):
         info = SearchUsageInfo(
             provider="tavily", supported=True, used=10, limit=100, remaining=90
         )
         text = info.format()
-        assert "Breakdown" not in text
+        assert "明细" not in text
 
     def test_brave_unsupported(self):
         info = SearchUsageInfo(provider="brave", supported=False)
         text = info.format()
         assert "brave" in text
-        assert "not available" in text
+        assert "此服务不支持" in text
 
 
 class TestParseTavilyUsage:
@@ -174,7 +174,7 @@ class TestFetchSearchUsageRouting:
         assert info.provider == "tavily"
         assert info.supported is True
         assert info.error is not None
-        assert "not configured" in info.error
+        assert "未配置" in info.error
 
     @pytest.mark.asyncio
     async def test_tavily_success(self):
@@ -265,24 +265,24 @@ class TestBuildStatusContentWithSearchUsage:
     def test_no_search_usage_unchanged(self):
         content = build_status_content(**self._BASE_KWARGS)
         assert "🔍" not in content
-        assert "Web Search" not in content
+        assert "网络搜索" not in content
 
     def test_search_usage_none_unchanged(self):
         content = build_status_content(**self._BASE_KWARGS, search_usage_text=None)
         assert "🔍" not in content
 
     def test_search_usage_appended(self):
-        usage_text = "🔍 Web Search: tavily\n   Usage: 142 / 1000 requests"
+        usage_text = "🔍 网络搜索：tavily\n   用量：142 / 1000 次请求"
         content = build_status_content(**self._BASE_KWARGS, search_usage_text=usage_text)
-        assert "🔍 Web Search: tavily" in content
+        assert "🔍 网络搜索：tavily" in content
         assert "142 / 1000" in content
 
     def test_existing_fields_still_present(self):
-        usage_text = "🔍 Web Search: duckduckgo\n   Usage tracking: not available"
+        usage_text = "🔍 网络搜索：duckduckgo\n   用量统计：此服务不支持"
         content = build_status_content(**self._BASE_KWARGS, search_usage_text=usage_text)
         assert "nanobot v0.1.0" in content
         assert "claude-opus-4-5" in content
-        assert "1000 in / 200 out" in content
+        assert "输入 1000 / 输出 200" in content
         assert "duckduckgo" in content
 
     def test_full_tavily_in_status(self):
@@ -301,4 +301,4 @@ class TestBuildStatusContentWithSearchUsage:
         assert "142 / 1000" in content
         assert "858" in content
         assert "2026-05-01" in content
-        assert "Search: 120" in content
+        assert "搜索：120" in content

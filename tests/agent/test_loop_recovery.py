@@ -333,7 +333,7 @@ async def test_recovery_distinguishes_explicit_stop_from_gateway_shutdown(
                     metadata={"webui": True},
                 ))
                 outbound = [bus.outbound.get_nowait() for _ in range(bus.outbound.qsize())]
-                assert any(message.content == "Stopped 1 task(s)." for message in outbound)
+                assert any(message.content == "已停止 1 个任务。" for message in outbound)
     finally:
         await loop.aclose()
 

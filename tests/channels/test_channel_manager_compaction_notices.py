@@ -89,7 +89,7 @@ async def test_dispatch_forwards_all_compaction_phases_before_adapter_filtering(
     assert received == [*messages, final]
     assert [msg.event for msg in received] == [*events, None]
     assert [msg.content for msg in received[-3:]] == [
-        "Compressing context…", "Context compacted.", "Final",
+        "正在压缩上下文……", "上下文压缩完成。", "Final",
     ]
     assert not manager._outbound_tasks
     assert not manager._outbound_tails

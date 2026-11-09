@@ -134,7 +134,7 @@ class TestMidTurnCommandDispatchedDirectly:
         fake_loop.sessions.state.reset = AsyncMock()
         result = await router.dispatch(ctx)
         assert result is not None
-        assert "New session" in result.content
+        assert "已开始新对话" in result.content
         fake_loop.sessions.state.reset.assert_awaited_once_with("test:chat1")
 
     @pytest.mark.asyncio
@@ -266,9 +266,9 @@ class TestPairingCommandDispatch:
         )
         result = await router.dispatch(ctx)
         assert result is not None
-        assert "Approved" in result.content
+        assert "已批准" in result.content
         assert result.content == (
-            "Approved pairing code `ABCD-EFGH` — 123 can now access telegram"
+            "已批准配对码 `ABCD-EFGH` — 123 现在可以访问 telegram"
         )
         assert result.metadata.get("_pairing_command") is True
 
@@ -288,6 +288,6 @@ class TestPairingCommandDispatch:
         )
         result = await router.dispatch(ctx)
         assert result is not None
-        assert "Revoked" in result.content
-        assert result.content == "Revoked 123 from telegram"
+        assert "已撤销" in result.content
+        assert result.content == "已撤销 123 在 telegram 的授权"
         assert result.metadata.get("_pairing_command") is True

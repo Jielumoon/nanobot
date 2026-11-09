@@ -854,18 +854,18 @@ def build_status_content(
         if context_tokens_estimate >= 1000
         else str(context_tokens_estimate)
     )
-    ctx_total_str = f"{ctx_total // 1000}k" if ctx_total > 0 else "n/a"
-    token_line = f"\U0001f4ca Tokens: {last_in} in / {last_out} out"
+    ctx_total_str = f"{ctx_total // 1000}k" if ctx_total > 0 else "不可用"
+    token_line = f"\U0001f4ca Token：输入 {last_in} / 输出 {last_out}"
     if cached and last_in:
-        token_line += f" ({cached * 100 // last_in}% cached)"
+        token_line += f"（缓存命中 {cached * 100 // last_in}%）"
     lines = [
         f"\U0001f408 nanobot v{version}",
-        f"\U0001f9e0 Model: {model}",
+        f"\U0001f9e0 模型：{model}",
         token_line,
-        f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}% of input budget)",
-        f"\U0001f4ac Session: {session_msg_count} messages",
-        f"\u23f1 Uptime: {uptime}",
-        f"\u26a1 Tasks: {active_task_count} active",
+        f"\U0001f4da 上下文：{ctx_used_str}/{ctx_total_str}（占输入预算 {ctx_pct}%）",
+        f"\U0001f4ac 会话消息：{session_msg_count} 条",
+        f"\u23f1 运行时间：{uptime}",
+        f"\u26a1 正在运行的任务：{active_task_count} 个",
     ]
     if search_usage_text:
         lines.append(search_usage_text)

@@ -26,36 +26,36 @@ class SearchUsageInfo:
 
     def format(self) -> str:
         """Return a human-readable multi-line string for /status output."""
-        lines: list[str] = [f"🔍 Web Search: {self.provider}"]
+        lines: list[str] = [f"🔍 网络搜索：{self.provider}"]
 
         if not self.supported:
-            lines.append("   Usage tracking: not available for this provider")
+            lines.append("   用量统计：此服务不支持")
             return "\n".join(lines)
 
         if self.error:
-            lines.append(f"   Usage: unavailable ({self.error})")
+            lines.append(f"   用量：暂不可用（{self.error}）")
             return "\n".join(lines)
 
         if self.used is not None and self.limit is not None:
-            lines.append(f"   Usage: {self.used} / {self.limit} requests")
+            lines.append(f"   用量：{self.used} / {self.limit} 次请求")
         elif self.used is not None:
-            lines.append(f"   Usage: {self.used} requests")
+            lines.append(f"   用量：{self.used} 次请求")
 
         breakdown_parts: list[str] = []
         if self.search_used is not None:
-            breakdown_parts.append(f"Search: {self.search_used}")
+            breakdown_parts.append(f"搜索：{self.search_used}")
         if self.extract_used is not None:
-            breakdown_parts.append(f"Extract: {self.extract_used}")
+            breakdown_parts.append(f"提取：{self.extract_used}")
         if self.crawl_used is not None:
-            breakdown_parts.append(f"Crawl: {self.crawl_used}")
+            breakdown_parts.append(f"抓取：{self.crawl_used}")
         if breakdown_parts:
-            lines.append(f"   Breakdown: {' | '.join(breakdown_parts)}")
+            lines.append(f"   明细：{' | '.join(breakdown_parts)}")
 
         if self.remaining is not None:
-            lines.append(f"   Remaining: {self.remaining} requests")
+            lines.append(f"   剩余：{self.remaining} 次请求")
 
         if self.reset_date:
-            lines.append(f"   Resets: {self.reset_date}")
+            lines.append(f"   重置日期：{self.reset_date}")
 
         return "\n".join(lines)
 
@@ -91,7 +91,7 @@ async def _fetch_tavily_usage(api_key: str | None) -> SearchUsageInfo:
         return SearchUsageInfo(
             provider="tavily",
             supported=True,
-            error="TAVILY_API_KEY not configured",
+            error="未配置 TAVILY_API_KEY",
         )
 
     try:

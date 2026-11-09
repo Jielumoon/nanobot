@@ -29,8 +29,8 @@ def format_restart_completed_message(started_at_raw: str) -> str:
     if started_at_raw:
         with suppress(ValueError):
             elapsed_s = max(0.0, time.time() - float(started_at_raw))
-            elapsed_suffix = f" in {elapsed_s:.1f}s"
-    return f"Restart completed{elapsed_suffix}."
+            elapsed_suffix = f"，用时 {elapsed_s:.1f}s"
+    return f"重启完成{elapsed_suffix}。"
 
 
 def set_restart_notice_to_env(

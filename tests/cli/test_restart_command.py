@@ -74,7 +74,7 @@ class TestRestartCommand:
              patch("nanobot.command.builtin.asyncio", new=fake_asyncio), \
              patch("nanobot.command.builtin.os.execv") as mock_execv:
             out = await cmd_restart(ctx)
-            assert "Restarting" in out.content
+            assert "正在重启" in out.content
             assert os.environ.get(RESTART_NOTIFY_CHANNEL_ENV) == "cli"
             assert os.environ.get(RESTART_NOTIFY_CHAT_ID_ENV) == "direct"
             assert os.environ.get(RESTART_STARTED_AT_ENV)
@@ -184,7 +184,7 @@ class TestRestartCommand:
                 pass
 
             mock_dispatch.assert_not_called()
-            assert "Restarting" in out.content
+            assert "正在重启" in out.content
             assert scheduled
             await scheduled[0]
 
@@ -207,7 +207,7 @@ class TestRestartCommand:
                 pass
 
             mock_dispatch.assert_not_called()
-            assert "nanobot" in out.content.lower() or "Model" in out.content
+            assert "nanobot" in out.content.lower() or "模型" in out.content
 
     @pytest.mark.asyncio
     async def test_run_propagates_external_cancellation(self):
@@ -260,12 +260,12 @@ class TestRestartCommand:
         response = await loop._process_message(msg, runtime=runtime)
 
         assert response is not None
-        assert "Model: test-model" in response.content
-        assert "Tokens: 0 in / 0 out" in response.content
-        assert "Context: 20k/200k (10% of input budget)" in response.content
-        assert "Session: 3 messages" in response.content
-        assert "Uptime: 2m 5s" in response.content
-        assert "Tasks: 0 active" in response.content
+        assert "模型：test-model" in response.content
+        assert "Token：输入 0 / 输出 0" in response.content
+        assert "上下文：20k/200k（占输入预算 10%）" in response.content
+        assert "会话消息：3 条" in response.content
+        assert "运行时间：2m 5s" in response.content
+        assert "正在运行的任务：0 个" in response.content
         assert response.metadata == {"render_as": "text"}
         loop.consolidator.estimate_session_prompt_tokens.assert_called_once_with(
             session,
@@ -294,7 +294,7 @@ class TestRestartCommand:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "Tasks: 3 active" in response.content
+        assert "正在运行的任务：3 个" in response.content
 
     @pytest.mark.asyncio
     async def test_run_agent_loop_estimates_usage_when_provider_omits_it(self, monkeypatch):
@@ -343,9 +343,9 @@ class TestRestartCommand:
         )
 
         assert response is not None
-        assert "Tokens: 1200 in / 34 out" in response.content
-        assert "Context: 1k/200k (0% of input budget)" in response.content
-        assert "Tasks: 0 active" in response.content
+        assert "Token：输入 1200 / 输出 34" in response.content
+        assert "上下文：1k/200k（占输入预算 0%）" in response.content
+        assert "正在运行的任务：0 个" in response.content
 
     @pytest.mark.asyncio
     async def test_history_shows_recent_messages(self):
@@ -364,8 +364,8 @@ class TestRestartCommand:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "👤 You: Hello" in response.content
-        assert "🤖 Bot: Hi there!" in response.content
+        assert "👤 你: Hello" in response.content
+        assert "🤖 助手: Hi there!" in response.content
         assert "tool result" not in response.content
         assert response.metadata == {"render_as": "text"}
 
@@ -382,7 +382,7 @@ class TestRestartCommand:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "Last 3 message(s)" in response.content
+        assert "最近 3 条消息" in response.content
         assert "message 19" in response.content
         assert "message 0" not in response.content
 
@@ -406,7 +406,7 @@ class TestRestartCommand:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "Last 50 message(s)" in response.content
+        assert "最近 50 条消息" in response.content
         assert "visible text" not in response.content
         assert "reply 59" in response.content
         assert "reply 9" not in response.content
@@ -419,7 +419,7 @@ class TestRestartCommand:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert response.content.startswith("Usage: /history [count]")
+        assert response.content.startswith("用法：/history [count]")
 
     @pytest.mark.asyncio
     async def test_history_empty_session(self):
@@ -432,7 +432,7 @@ class TestRestartCommand:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "No conversation history yet." in response.content
+        assert "暂无对话历史。" in response.content
 
     @pytest.mark.asyncio
     async def test_process_direct_preserves_render_metadata(self):

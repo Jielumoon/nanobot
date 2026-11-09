@@ -13,7 +13,7 @@ from nanobot.session.history_visibility import HIDDEN_HISTORY_META
 GOAL_COMMAND_SPEC = BuiltinCommandSpec(
     GOAL_COMMAND,
     "Start long-running goal",
-    "Tell the agent to treat the request as a long-running goal.",
+    "将请求作为长任务处理。",
     "activity",
     "<goal>",
     lifecycle="agent_turn_with_args",
@@ -28,14 +28,14 @@ async def cmd_goal(ctx: CommandInput) -> CommandExpansion | OutboundMessage:
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
-            content="Usage: /goal <long-running task description>",
+            content="用法：/goal <long-running task description>",
             metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
         )
     if not ctx.is_user_turn:
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
-            content="Goal mode can only be started by a user `/goal <task>` command.",
+            content="长任务只能由用户通过 `/goal <task>` 命令启动。",
             metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
         )
 
@@ -51,7 +51,7 @@ async def cmd_goal(ctx: CommandInput) -> CommandExpansion | OutboundMessage:
                 HIDDEN_HISTORY_META: {"kind": "goal_request"},
             },
         ),
-        temporary_session_error="Goals can't start in a temporary session. Use a persistent session for `/goal`.",
+        temporary_session_error="临时会话无法启动长任务，请在持久会话中使用 `/goal`。",
     )
 
 

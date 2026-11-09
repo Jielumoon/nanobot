@@ -156,13 +156,13 @@ async def test_dream_no_history_explains_how_to_create_input(tmp_path) -> None:
 
     immediate = await _run_dream_command(ctx)
 
-    assert immediate.content == "Dreaming..."
+    assert immediate.content == "正在整理 Dream 记忆……"
     assert len(bus.outbound) == 1
     content = bus.outbound[0].content
-    assert "Dream has no conversation history to process yet." in content
+    assert "Dream 暂无可处理的对话历史。" in content
     assert "`memory/history.jsonl`" in content
-    assert "idle auto-compact" in content
-    assert "Dream cursor" in content
+    assert "空闲自动压缩" in content
+    assert "Dream 处理游标" in content
     assert "agents.defaults.idleCompactAfterMinutes" in content
     assert "/dream-prompt" in content
 
@@ -201,14 +201,14 @@ async def test_dream_internal_run_silences_progress(tmp_path) -> None:
 
     immediate = await _run_dream_command(ctx)
 
-    assert immediate.content == "Dreaming..."
+    assert immediate.content == "正在整理 Dream 记忆……"
     assert (immediate.channel, immediate.chat_id) == ("feishu", "chat1")
     assert len(calls) == 1
     assert calls[0][1]["runtime"] is dream_runtime
     assert len(bus.outbound) == 1
     completion = bus.outbound[0]
     assert (completion.channel, completion.chat_id) == ("feishu", "chat1")
-    assert completion.content.startswith("Dream completed")
+    assert completion.content.startswith("Dream 记忆整理完成")
     assert progress_sentinel not in completion.content
 
 
@@ -270,7 +270,7 @@ async def test_dream_advances_cursor_on_completed_noop(tmp_path) -> None:
     ctx, store = _build_runnable_dream(tmp_path, initialized=True, content_diff="")
     await _run_dream_command(ctx)
     assert store._last_dream_cursor == 42
-    assert "no memory changes" in ctx.loop.bus.outbound[0].content
+    assert "记忆无变更" in ctx.loop.bus.outbound[0].content
 
 
 @pytest.mark.asyncio
@@ -283,7 +283,7 @@ async def test_dream_keeps_cursor_when_incomplete_with_diff(tmp_path) -> None:
     )
     await _run_dream_command(ctx)
     assert store._last_dream_cursor == 5
-    assert "did not complete" in ctx.loop.bus.outbound[0].content
+    assert "记忆整理未完成" in ctx.loop.bus.outbound[0].content
 
 
 @pytest.mark.asyncio
@@ -296,7 +296,7 @@ async def test_dream_advances_cursor_when_completed_after_tool_error(tmp_path) -
     )
     await _run_dream_command(ctx)
     assert store._last_dream_cursor == 42
-    assert "no memory changes" in ctx.loop.bus.outbound[0].content
+    assert "记忆无变更" in ctx.loop.bus.outbound[0].content
 
 
 @pytest.mark.asyncio
@@ -370,11 +370,11 @@ async def test_dream_log_latest_is_more_user_friendly() -> None:
 
     out = await cmd_dream_log(_make_ctx("/dream-log", git))
 
-    assert "## Dream Update" in out.content
-    assert "Here is the latest Dream memory change." in out.content
-    assert "- Commit: `abcd1234`" in out.content
-    assert "- Changed files: `SOUL.md`" in out.content
-    assert "Use `/dream-restore abcd1234` to undo this change." in out.content
+    assert "## Dream 记忆变更" in out.content
+    assert "以下是最新的 Dream 记忆变更。" in out.content
+    assert "- 提交：`abcd1234`" in out.content
+    assert "- 变更文件：`SOUL.md`" in out.content
+    assert "使用 `/dream-restore abcd1234` 撤销这次变更。" in out.content
     assert "```diff" in out.content
 
 
@@ -404,8 +404,8 @@ async def test_dream_log_missing_commit_guides_user() -> None:
 
     out = await cmd_dream_log(_make_ctx("/dream-log deadbeef", git, args="deadbeef"))
 
-    assert "Couldn't find Dream change `deadbeef`." in out.content
-    assert "Use `/dream-restore` to list recent versions" in out.content
+    assert "找不到 Dream 变更 `deadbeef`。" in out.content
+    assert "使用 `/dream-restore` 列出近期版本" in out.content
 
 
 @pytest.mark.asyncio
@@ -414,8 +414,8 @@ async def test_dream_log_before_first_run_is_clear() -> None:
 
     out = await cmd_dream_log(_make_ctx("/dream-log", git, last_dream_cursor=0))
 
-    assert "Dream has not run yet." in out.content
-    assert "Run `/dream`" in out.content
+    assert "Dream 尚未运行。" in out.content
+    assert "运行 `/dream`" in out.content
     assert "/dream-prompt" in out.content
 
 
@@ -425,7 +425,7 @@ async def test_dream_log_without_saved_versions_mentions_prompt_command() -> Non
 
     out = await cmd_dream_log(_make_ctx("/dream-log", git))
 
-    assert "Dream memory has no saved versions yet." in out.content
+    assert "Dream 记忆尚无已保存的版本。" in out.content
     assert "/dream-prompt" in out.content
 
 
@@ -433,7 +433,7 @@ async def test_dream_log_without_saved_versions_mentions_prompt_command() -> Non
 async def test_dream_prompt_reports_default_prompt(tmp_path) -> None:
     out = await cmd_dream_prompt(_make_dream_prompt_ctx(tmp_path))
 
-    assert "Dream memory instructions: nanobot default" in out.content
+    assert "Dream 记忆整理规则：nanobot 默认" in out.content
     assert "prompts/dream.md" in out.content
     assert str(tmp_path) not in out.content
     assert "/dream-prompt init" in out.content
@@ -446,10 +446,10 @@ async def test_dream_prompt_init_copies_default_prompt(tmp_path) -> None:
     out = await cmd_dream_prompt(ctx)
 
     prompt_file = tmp_path / "prompts" / "dream.md"
-    assert "Created Dream memory instructions" in out.content
+    assert "已创建 Dream 记忆整理规则文件" in out.content
     assert "prompts/dream.md" in out.content
     assert str(tmp_path) not in out.content
-    assert "fully replaces nanobot's default Dream guide" in out.content
+    assert "完全替代当前工作区的 nanobot 默认 Dream 规则" in out.content
     assert prompt_file.read_text(encoding="utf-8") == MemoryStore.default_dream_prompt() + "\n"
 
 
@@ -462,7 +462,7 @@ async def test_dream_prompt_init_does_not_overwrite_existing_prompt(tmp_path) ->
 
     out = await cmd_dream_prompt(ctx)
 
-    assert "already exist" in out.content
+    assert "已存在" in out.content
     assert "prompts/dream.md" in out.content
     assert str(tmp_path) not in out.content
     assert prompt_file.read_text(encoding="utf-8") == "custom"
@@ -477,7 +477,7 @@ async def test_dream_prompt_init_recreates_empty_prompt(tmp_path) -> None:
 
     out = await cmd_dream_prompt(ctx)
 
-    assert "Created Dream memory instructions" in out.content
+    assert "已创建 Dream 记忆整理规则文件" in out.content
     assert prompt_file.read_text(encoding="utf-8") == MemoryStore.default_dream_prompt() + "\n"
 
 
@@ -502,13 +502,13 @@ async def test_dream_restore_lists_versions_with_next_steps() -> None:
 
     out = await cmd_dream_restore(_make_ctx("/dream-restore", git))
 
-    assert "## Dream Restore" in out.content
-    assert "Choose a Dream memory version to restore." in out.content
+    assert "## Dream 记忆恢复" in out.content
+    assert "选择要恢复的 Dream 记忆版本" in out.content
     assert "`abcd1234` 2026-04-04 12:00 - dream: latest" in out.content
     assert "`bbbb2222` 2026-04-04 08:00 - dream: older" in out.content
     assert "backup: workspace" not in out.content
-    assert "Preview a version with `/dream-log <sha>`" in out.content
-    assert "Restore a version with `/dream-restore <sha>`." in out.content
+    assert "使用 `/dream-log <sha>` 预览版本" in out.content
+    assert "使用 `/dream-restore <sha>` 恢复版本。" in out.content
 
 
 @pytest.mark.asyncio
@@ -535,10 +535,10 @@ async def test_dream_restore_success_mentions_files_and_followup() -> None:
 
     out = await cmd_dream_restore(_make_ctx("/dream-restore abcd1234", git, args="abcd1234"))
 
-    assert "Restored Dream memory to the state before `abcd1234`." in out.content
-    assert "- New safety commit: `eeee9999`" in out.content
-    assert "- Restored files: `SOUL.md`, `memory/MEMORY.md`" in out.content
-    assert "Use `/dream-log eeee9999` to inspect the restore diff." in out.content
+    assert "已将 Dream 记忆恢复至 `abcd1234` 变更之前的状态。" in out.content
+    assert "- 新建的安全提交：`eeee9999`" in out.content
+    assert "- 已恢复文件：`SOUL.md`, `memory/MEMORY.md`" in out.content
+    assert "使用 `/dream-log eeee9999` 查看恢复产生的差异。" in out.content
     assert git.revert_calls == [("abcd1234", "dream:")]
 
 
@@ -554,6 +554,6 @@ async def test_dream_restore_rejects_non_dream_commit_clearly() -> None:
 
     out = await cmd_dream_restore(_make_ctx("/dream-restore cccc3333", git, args="cccc3333"))
 
-    assert "Only Dream memory versions can be restored." in out.content
-    assert "Use `/dream-restore` to list recent versions." in out.content
+    assert "只能恢复 Dream 记忆版本。" in out.content
+    assert "使用 `/dream-restore` 列出近期版本。" in out.content
     assert git.revert_calls == []

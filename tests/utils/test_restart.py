@@ -78,7 +78,7 @@ def test_restart_notice_clears_stale_metadata(monkeypatch):
 
 def test_format_restart_completed_message_with_elapsed(monkeypatch):
     monkeypatch.setattr("nanobot.utils.restart.time.time", lambda: 102.0)
-    assert format_restart_completed_message("100.0") == "Restart completed in 2.0s."
+    assert format_restart_completed_message("100.0") == "重启完成，用时 2.0s。"
 
 
 def test_should_show_cli_restart_notice():

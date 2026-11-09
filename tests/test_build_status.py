@@ -12,9 +12,9 @@ def test_status_shows_cache_hit_rate():
         session_msg_count=10,
         context_tokens_estimate=5000,
     )
-    assert "60% cached" in content
-    assert "2000 in / 300 out" in content
-    assert "Tasks: 0 active" in content
+    assert "缓存命中 60%" in content
+    assert "输入 2000 / 输出 300" in content
+    assert "正在运行的任务：0 个" in content
 
 
 def test_status_no_cache_info():
@@ -27,9 +27,9 @@ def test_status_no_cache_info():
         session_msg_count=10,
         context_tokens_estimate=5000,
     )
-    assert "cached" not in content.lower()
-    assert "2000 in / 300 out" in content
-    assert "Tasks: 0 active" in content
+    assert "缓存命中" not in content.lower()
+    assert "输入 2000 / 输出 300" in content
+    assert "正在运行的任务：0 个" in content
 
 
 def test_status_zero_cache_read_tokens():
@@ -42,7 +42,7 @@ def test_status_zero_cache_read_tokens():
         session_msg_count=10,
         context_tokens_estimate=5000,
     )
-    assert "cached" not in content.lower()
+    assert "缓存命中" not in content.lower()
 
 
 def test_status_100_percent_cached():
@@ -55,7 +55,7 @@ def test_status_100_percent_cached():
         session_msg_count=5,
         context_tokens_estimate=3000,
     )
-    assert "100% cached" in content
+    assert "缓存命中 100%" in content
 
 
 def test_status_context_pct_uses_budget_not_total():
@@ -69,7 +69,7 @@ def test_status_context_pct_uses_budget_not_total():
         context_tokens_estimate=120000,
         max_completion_tokens=8192,
     )
-    assert "(101% of input budget)" in content
+    assert "（占输入预算 101%）" in content
 
 
 def test_status_context_pct_capped_at_999():
@@ -83,4 +83,4 @@ def test_status_context_pct_capped_at_999():
         context_tokens_estimate=100000,
         max_completion_tokens=4096,
     )
-    assert "(999% of input budget)" in content
+    assert "（占输入预算 999%）" in content

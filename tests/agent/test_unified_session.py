@@ -228,7 +228,7 @@ class TestCmdNewUnifiedSession:
 
         result = await cmd_new(ctx)
 
-        assert "New session started" in result.content
+        assert "已开始新对话" in result.content
         sessions.invalidate("unified:default")
         reloaded = sessions.get_or_create("unified:default")
         assert reloaded.messages == []
@@ -318,7 +318,7 @@ class TestStopCommandWithUnifiedSession:
         result = await cmd_stop(ctx)
 
         assert task.cancelled() or task.done()
-        assert "Stopped 1 task" in result.content
+        assert "已停止 1 个任务" in result.content
 
     @pytest.mark.asyncio
     async def test_stop_command_uses_effective_key_without_session_override(self, tmp_path: Path):
@@ -342,7 +342,7 @@ class TestStopCommandWithUnifiedSession:
         result = await cmd_stop(ctx)
 
         assert task.cancelled() or task.done()
-        assert "Stopped 1 task" in result.content
+        assert "已停止 1 个任务" in result.content
 
     @pytest.mark.asyncio
     async def test_stop_command_cross_channel_in_unified_mode(self, tmp_path: Path):
@@ -369,4 +369,4 @@ class TestStopCommandWithUnifiedSession:
 
         result = await cmd_stop(ctx)
 
-        assert "Stopped 2 task" in result.content
+        assert "已停止 2 个任务" in result.content

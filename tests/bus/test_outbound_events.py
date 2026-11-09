@@ -14,10 +14,10 @@ from nanobot.bus.outbound_events import (
 
 def test_compaction_events_have_readable_channel_fallbacks() -> None:
     for event, expected in [
-        (ContextCompactionEvent("1", "started"), "Compressing context…"),
-        (ContextCompactionEvent("1", "succeeded"), "Context compacted."),
-        (ContextCompactionEvent("1", "failed"), "Unable to compact context."),
-        (ContextCompactionEvent("1", "cancelled"), "Context compaction cancelled."),
+        (ContextCompactionEvent("1", "started"), "正在压缩上下文……"),
+        (ContextCompactionEvent("1", "succeeded"), "上下文压缩完成。"),
+        (ContextCompactionEvent("1", "failed"), "无法压缩上下文。"),
+        (ContextCompactionEvent("1", "cancelled"), "上下文压缩已取消。"),
     ]:
         msg = outbound_message_for_event(channel="cli", chat_id="direct", event=event)
         assert msg.content == expected

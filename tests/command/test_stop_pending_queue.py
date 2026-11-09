@@ -30,7 +30,7 @@ async def test_cmd_stop_drains_pending_queue():
     result = await cmd_stop(ctx)
 
     assert isinstance(result, OutboundMessage)
-    assert "Stopped 3 task(s)" in result.content
+    assert "已停止 3 个任务" in result.content
     assert "test-session" not in mock_loop._pending_queues
 
 
@@ -53,7 +53,7 @@ async def test_cmd_stop_with_empty_pending_queue():
 
     result = await cmd_stop(ctx)
 
-    assert "Stopped 2 task(s)" in result.content
+    assert "已停止 2 个任务" in result.content
     assert "test-session" not in mock_loop._pending_queues
 
 
@@ -73,4 +73,4 @@ async def test_cmd_stop_no_pending_queue():
 
     result = await cmd_stop(ctx)
 
-    assert "No active task to stop" in result.content
+    assert "没有正在运行的任务" in result.content

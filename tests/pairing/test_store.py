@@ -99,7 +99,7 @@ class TestDelivery:
         before = store._store_path().read_bytes()
         with monkeypatch.context() as m:
             def fail(_data):
-                raise OSError("disk unavailable")
+                raise OSError("disk 暂不可用")
             m.setattr(store, "_save", fail)
             store.record_delivery(code, "sent")
         assert store._store_path().read_bytes() == before
@@ -112,8 +112,8 @@ class TestFormatPairingReply:
         assert "nanobot WebUI" in reply
         assert "ABCD-EFGH" in reply
         assert "/pairing approve ABCD-EFGH" in reply
-        assert "private nanobot" in reply
-        assert "approved users" not in reply
+        assert "私人 nanobot" in reply
+        assert "已授权用户" not in reply
 
 
 class TestApproveDeny:
@@ -196,31 +196,31 @@ class TestListPending:
 class TestHandlePairingCommand:
     def test_list_empty(self) -> None:
         reply = store.handle_pairing_command("telegram", "list")
-        assert reply == "No pending pairing requests."
+        assert reply == "暂无待处理的配对请求。"
 
     def test_list_pending(self) -> None:
         store.generate_code("telegram", "123")
         reply = store.handle_pairing_command("telegram", "list")
-        assert "Pending pairing requests:" in reply
+        assert "待处理的配对请求：" in reply
         assert "telegram" in reply
         assert "123" in reply
 
     def test_approve(self) -> None:
         code = store.generate_code("telegram", "123")
         reply = store.handle_pairing_command("telegram", f"approve {code}")
-        assert "Approved" in reply
+        assert "已批准" in reply
         assert "123" in reply
         assert store.is_approved("telegram", "123") is True
 
     @pytest.mark.parametrize(
         "command, expected",
         [
-            pytest.param("approve BAD-CODE", "Invalid or expired", id="approve_invalid"),
-            pytest.param("approve", "Usage:", id="approve_no_arg"),
-            pytest.param("deny BAD-CODE", "not found", id="deny_unknown"),
-            pytest.param("revoke 999", "was not in the approved list", id="revoke_unknown"),
-            pytest.param("revoke", "Usage:", id="revoke_no_arg"),
-            pytest.param("foo", "Unknown pairing command", id="unknown_subcommand"),
+            pytest.param("approve BAD-CODE", "配对码无效或已过期", id="approve_invalid"),
+            pytest.param("approve", "用法：", id="approve_no_arg"),
+            pytest.param("deny BAD-CODE", "不存在", id="deny_unknown"),
+            pytest.param("revoke 999", "不在 telegram 的已授权列表", id="revoke_unknown"),
+            pytest.param("revoke", "用法：", id="revoke_no_arg"),
+            pytest.param("foo", "未知配对命令", id="unknown_subcommand"),
         ],
     )
     def test_pairing_command_errors(self, command, expected) -> None:
@@ -230,27 +230,27 @@ class TestHandlePairingCommand:
     def test_deny(self) -> None:
         code = store.generate_code("telegram", "123")
         reply = store.handle_pairing_command("telegram", f"deny {code}")
-        assert "Denied" in reply
+        assert "已拒绝" in reply
         assert store.approve_code(code) is None
 
     def test_revoke_current_channel(self) -> None:
         code = store.generate_code("telegram", "123")
         store.approve_code(code)
         reply = store.handle_pairing_command("telegram", "revoke 123")
-        assert "Revoked" in reply
+        assert "已撤销" in reply
         assert store.is_approved("telegram", "123") is False
 
     def test_revoke_other_channel(self) -> None:
         code = store.generate_code("discord", "456")
         store.approve_code(code)
         reply = store.handle_pairing_command("telegram", "revoke discord 456")
-        assert "Revoked" in reply
+        assert "已撤销" in reply
         assert store.is_approved("discord", "456") is False
 
     def test_default_to_list(self) -> None:
         store.generate_code("telegram", "123")
         reply = store.handle_pairing_command("telegram", "")
-        assert "Pending pairing requests:" in reply
+        assert "待处理的配对请求：" in reply
 
 
 class TestNonStringSenderId:
@@ -432,7 +432,7 @@ class TestTransientReadFailure:
             _fail_reads_of(m, store._store_path())
             reply = store.handle_pairing_command("telegram", f"approve {code}")
 
-        assert "unavailable" in reply.lower()
+        assert "暂不可用" in reply.lower()
         assert store.approve_code(code) == ("telegram", "123")
 
 
@@ -470,7 +470,7 @@ class TestChangeNotifications:
             changes.append(json.loads(store._store_path().read_text()))
 
         code = store.generate_code("telegram", "alice")
-        assert "Approved" in store.handle_pairing_command("cli", f"approve {code}", on_change=changed)
+        assert "已批准" in store.handle_pairing_command("cli", f"approve {code}", on_change=changed)
         assert changes[-1]["approved"] == {"telegram": ["alice"]}
         store.handle_pairing_command("cli", "list", on_change=changed)
         store.handle_pairing_command("cli", "approve invalid", on_change=changed)

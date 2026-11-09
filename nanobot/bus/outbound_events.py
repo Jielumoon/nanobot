@@ -154,10 +154,10 @@ def _event_content(event: AgentEvent) -> str:
         return event.content
     if isinstance(event, ContextCompactionEvent):
         if event.phase == "started":
-            return "Compressing context…"
+            return "正在压缩上下文……"
         if event.phase == "failed":
-            return "Unable to compact context."
+            return "无法压缩上下文。"
         if event.phase == "cancelled":
-            return "Context compaction cancelled."
-        return "Context compacted."
+            return "上下文压缩已取消。"
+        return "上下文压缩完成。"
     return ""

@@ -66,7 +66,7 @@ async def test_idle_new_resets_session_and_accepts_next_message(loop):
                 reply = await loop.bus.consume_outbound()
                 if reply.event is None:
                     break
-        assert reply.content == "New session started."
+        assert reply.content == "已开始新对话。"
         assert (await loop.sessions.state.read(key)).messages == []
 
         await loop.bus.publish_inbound(InboundMessage(
@@ -118,7 +118,7 @@ async def test_message_queued_during_idle_new_runs_in_reset_session(loop):
                 reply = await loop.bus.consume_outbound()
                 if reply.event is None:
                     replies.append(reply.content)
-        assert replies == ["New session started.", "fresh reply"]
+        assert replies == ["已开始新对话。", "fresh reply"]
         session = await loop.sessions.state.read(key)
         assert any(str(message.get("content", "")).startswith("hello") for message in session.messages)
     finally:
@@ -153,7 +153,7 @@ async def test_new_during_active_turn_stops_it_and_resets_session(loop):
         async with asyncio.timeout(5):
             while True:
                 reply = await loop.bus.consume_outbound()
-                if reply.event is None and reply.content == "New session started.":
+                if reply.event is None and reply.content == "已开始新对话。":
                     break
         assert cancelled.is_set()
         assert (await loop.sessions.state.read(key)).messages == []

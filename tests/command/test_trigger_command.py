@@ -37,7 +37,7 @@ async def test_trigger_command_creates_session_bound_local_trigger(tmp_path: Pat
     response = await router.dispatch(ctx)
 
     assert response is not None
-    assert "Trigger created: PR review" in response.content
+    assert "已创建触发器：PR review" in response.content
     trigger = store.list_for_session("websocket:chat-1")[0]
     assert trigger.name == "PR review"
     assert trigger.channel == "websocket"
@@ -101,7 +101,7 @@ async def test_trigger_command_without_name_returns_usage_only(tmp_path: Path) -
     response = await router.dispatch(ctx)
 
     assert response is not None
-    assert "Usage: /trigger <name>" in response.content
+    assert "用法：/trigger <name>" in response.content
     assert store.list_for_session("websocket:chat-1") == []
 
 

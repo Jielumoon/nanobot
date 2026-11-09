@@ -68,7 +68,7 @@ def _loop_with_skills(tmp_path: Path) -> AgentLoop:
 async def test_skill_command_no_skills(tmp_path: Path) -> None:
     loop = _loop_with_skills(tmp_path)
     out = await cmd_skill(_ctx(loop))
-    assert out.content == "No skills available."
+    assert out.content == "暂无可用技能。"
 
 
 @pytest.mark.asyncio
@@ -81,7 +81,7 @@ async def test_skill_command_lists_names_and_descriptions(tmp_path: Path) -> Non
     loop = _loop_with_skills(tmp_path)
     out = await cmd_skill(_ctx(loop))
 
-    assert "Available skills (2):" in out.content
+    assert "可用技能（2）：" in out.content
     assert "**weather** — Get current weather and forecasts" in out.content
     assert "**cron** — Schedule recurring tasks" in out.content
     assert ".md" not in out.content
@@ -132,4 +132,4 @@ async def test_skill_command_registered_on_router(tmp_path: Path) -> None:
     out = await router.dispatch(_ctx(loop, "/skill"))
 
     assert out is not None
-    assert "No skills available." in out.content
+    assert "暂无可用技能。" in out.content

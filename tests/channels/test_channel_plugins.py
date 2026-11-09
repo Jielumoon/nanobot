@@ -3703,7 +3703,7 @@ async def test_notify_restart_done_waits_until_channel_starts():
     assert sent_channel is channel
     assert sent_msg.channel == "feishu"
     assert sent_msg.chat_id == "oc_123"
-    assert sent_msg.content.startswith("Restart completed")
+    assert sent_msg.content.startswith("重启完成")
 
 
 @pytest.mark.asyncio
@@ -3761,4 +3761,4 @@ async def test_restart_notice_retries_until_running_channel_accepts_delivery():
 
     assert channel.attempts == 2
     assert channel.sent is not None
-    assert channel.sent.content == "Restart completed."
+    assert channel.sent.content == "重启完成。"

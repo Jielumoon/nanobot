@@ -34,39 +34,39 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/new",
         "New chat",
-        "Reset this chat and start a fresh conversation.",
+        "重置当前聊天并开始新对话。",
         "square-pen",
         lifecycle="finalize_active_turn",
     ),
     BuiltinCommandSpec(
         "/compact",
         "Compact context",
-        "Compact this chat's context and continue the conversation.",
+        "压缩当前聊天的上下文并继续对话。",
         "archive",
     ),
     BuiltinCommandSpec(
         "/stop",
         "Stop current task",
-        "Cancel the active agent turn for this chat.",
+        "停止当前聊天的本轮执行。",
         "square",
         lifecycle="stop_active_turn",
     ),
     BuiltinCommandSpec(
         "/restart",
         "Restart nanobot",
-        "Restart the bot process.",
+        "重启机器人进程。",
         "rotate-cw",
     ),
     BuiltinCommandSpec(
         "/status",
         "Show status",
-        "Display runtime, provider, and channel status.",
+        "查看运行、模型服务及渠道状态。",
         "activity",
     ),
     BuiltinCommandSpec(
         "/model",
         "Switch model preset",
-        "Show or switch the active model preset.",
+        "查看或切换当前模型预设。",
         "brain",
         "[preset]",
         accepts_args=True,
@@ -74,7 +74,7 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/history",
         "Show conversation history",
-        "Print the last N persisted conversation messages.",
+        "显示最近 N 条已保存的对话消息。",
         "history",
         "[n]",
         accepts_args=True,
@@ -82,7 +82,7 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/trigger",
         "Create named local trigger",
-        "Create a named CLI trigger bound to this chat session.",
+        "创建绑定当前会话的命名 CLI 触发器。",
         "zap",
         "<name>",
         accepts_args=True,
@@ -90,27 +90,27 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/dream",
         "Run Dream",
-        "Manually trigger memory consolidation.",
+        "手动触发记忆整理。",
         "sparkles",
     ),
     BuiltinCommandSpec(
         "/dream-log",
         "Show Dream log",
-        "Show what the last Dream consolidation changed.",
+        "查看上次 Dream 记忆整理的变更。",
         "book-open",
         accepts_args=True,
     ),
     BuiltinCommandSpec(
         "/dream-restore",
         "Restore memory",
-        "Revert memory to a previous Dream snapshot.",
+        "将记忆恢复至之前的 Dream 快照。",
         "undo-2",
         accepts_args=True,
     ),
     BuiltinCommandSpec(
         "/dream-prompt",
         "Dream memory",
-        "Tell Dream how to organize this workspace's memory.",
+        "自定义当前工作区的 Dream 记忆整理规则。",
         "file-text",
         "[init]",
         accepts_args=True,
@@ -118,7 +118,7 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/evaluator-prompt",
         "Heartbeat evaluator",
-        "Customize the heartbeat notification gate prompt for this workspace.",
+        "自定义当前工作区心跳通知的审核提示词。",
         "file-text",
         "[init]",
         accepts_args=True,
@@ -126,19 +126,19 @@ CORE_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
     BuiltinCommandSpec(
         "/skill",
         "List skills",
-        "List all enabled skills available to the agent.",
+        "列出已启用且可用的技能。",
         "wrench",
     ),
     BuiltinCommandSpec(
         "/help",
         "Show help",
-        "List available slash commands.",
+        "列出可用的斜杠命令。",
         "circle-help",
     ),
     BuiltinCommandSpec(
         "/pairing",
         "Manage pairing",
-        "List, approve, deny or revoke pairing requests.",
+        "查看、批准、拒绝配对请求，或撤销授权。",
         "shield",
         "[list|approve <code>|deny <code>|revoke <user_id>]",
         accepts_args=True,
@@ -160,7 +160,7 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
                 total += 1
             except Exception:
                 break
-    content = f"Stopped {total} task(s)." if total else "No active task to stop."
+    content = f"已停止 {total} 个任务。" if total else "没有正在运行的任务。"
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content=content,
         metadata=dict(msg.metadata or {})
@@ -194,7 +194,7 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 
     asyncio.create_task(_do_restart())
     return OutboundMessage(
-        channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
+        channel=msg.channel, chat_id=msg.chat_id, content="正在重启……",
         metadata=dict(msg.metadata or {})
     )
 
@@ -277,7 +277,7 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     await shield_and_drain(reset_and_schedule_archive())
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content="New session started.",
+        content="已开始新对话。",
         metadata=dict(ctx.msg.metadata or {})
     )
 
@@ -304,7 +304,7 @@ async def cmd_compact(ctx: CommandContext) -> None:
 
 
 def _format_preset_names(names: list[str]) -> str:
-    return ", ".join(f"`{name}`" for name in names) if names else "(none configured)"
+    return ", ".join(f"`{name}`" for name in names) if names else "（尚未配置）"
 
 
 def _model_preset_names(loop: AgentLoop) -> list[str]:
@@ -323,17 +323,17 @@ async def _model_command_status(loop: AgentLoop, session: Session) -> str:
         runtime = await loop.runtime_for_session(session, recover_removed=False)
     except (KeyError, ValueError) as exc:
         return "\n".join([
-            "## Model",
-            f"- Current selection error: {_command_error_message(exc)}",
-            f"- Available presets: {_format_preset_names(names)}",
-            "- Switch with `/model <preset>`.",
+            "## 模型",
+            f"- 当前模型配置错误：{_command_error_message(exc)}",
+            f"- 可用预设：{_format_preset_names(names)}",
+            "- 使用 `/model <preset>` 切换预设。",
         ])
     active = runtime.model_preset or "default"
     return "\n".join([
-        "## Model",
-        f"- Current model: `{runtime.model}`",
-        f"- Current preset: `{active}`",
-        f"- Available presets: {_format_preset_names(names)}",
+        "## 模型",
+        f"- 当前模型：`{runtime.model}`",
+        f"- 当前预设：`{active}`",
+        f"- 可用预设：{_format_preset_names(names)}",
     ])
 
 
@@ -361,20 +361,20 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
             content=(
-                f"Could not switch model preset: {_command_error_message(exc)}\n\n"
-                f"Available presets: {_format_preset_names(names)}"
+                f"无法切换模型预设：{_command_error_message(exc)}\n\n"
+                f"可用预设：{_format_preset_names(names)}"
             ),
             metadata=metadata,
         )
 
     max_tokens = runtime.generation.max_tokens
     lines = [
-        f"Switched model preset to `{runtime.model_preset}`.",
-        "- Scope: current session",
-        f"- Model: `{runtime.model}`",
-        f"- Context window: {runtime.context_window_tokens}",
+        f"已切换至模型预设 `{runtime.model_preset}`。",
+        "- 生效范围：当前会话",
+        f"- 模型：`{runtime.model}`",
+        f"- 上下文窗口：{runtime.context_window_tokens}",
     ]
-    lines.append(f"- Max output tokens: {max_tokens}")
+    lines.append(f"- 最大输出 token 数：{max_tokens}")
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
@@ -432,24 +432,24 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
             if completed:
                 store.set_last_dream_cursor(last_cursor)
                 if diff_body:
-                    content = f"Dream completed in {elapsed:.1f}s."
+                    content = f"Dream 记忆整理完成，用时 {elapsed:.1f}s。"
                 else:
-                    content = f"Dream completed in {elapsed:.1f}s; no memory changes."
+                    content = f"Dream 记忆整理完成，用时 {elapsed:.1f}s；记忆无变更。"
             else:
                 reason = MemoryStore.dream_incompletion_reason(resp)
                 content = (
-                    f"Dream did not complete after {elapsed:.1f}s ({reason}); "
-                    "memory cursor was not advanced."
+                    f"Dream 记忆整理未完成，用时 {elapsed:.1f}s（{reason}）；"
+                    "记忆处理游标未推进。"
                 )
         except Exception as e:
             elapsed = time.monotonic() - t0
-            content = f"Dream failed after {elapsed:.1f}s: {e}"
+            content = f"Dream 记忆整理失败，用时 {elapsed:.1f}s：{e}"
         finally:
             if store.git.is_initialized():
                 commit_msg = build_dream_commit_message("dream: manual run", diff_body)
                 sha = store.git.auto_commit(commit_msg)
                 if sha:
-                    content += f" (commit {sha})"
+                    content += f"（提交 {sha}）"
             store.compact_history()
             await loop.sessions.state.prune_dream_sessions()
         await loop.bus.publish_outbound(OutboundMessage(
@@ -458,7 +458,7 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
 
     asyncio.create_task(_run_dream())
     return OutboundMessage(
-        channel=msg.channel, chat_id=msg.chat_id, content="Dreaming...",
+        channel=msg.channel, chat_id=msg.chat_id, content="正在整理 Dream 记忆……",
     )
 
 
@@ -472,29 +472,29 @@ async def cmd_dream_prompt(ctx: CommandContext) -> OutboundMessage:
     if args == "init":
         if not initialize_workspace_prompt(path, store.default_dream_prompt()):
             content = (
-                f"Dream memory instructions already exist at `{display_path}`.\n\n"
-                "Edit that file, or delete/empty it to return to nanobot's default."
+                f"Dream 记忆整理规则文件已存在：`{display_path}`。\n\n"
+                "可直接编辑该文件；删除或清空文件即可恢复 nanobot 默认规则。"
             )
         else:
             content = (
-                f"Created Dream memory instructions at `{display_path}`.\n\n"
-                "Edit that file to teach Dream how to organize memory. "
-                "This fully replaces nanobot's default Dream guide for this workspace. "
-                "Delete or empty it to return to nanobot's default."
+                f"已创建 Dream 记忆整理规则文件：`{display_path}`。\n\n"
+                "编辑该文件可指定 Dream 如何整理记忆。"
+                "该文件会完全替代当前工作区的 nanobot 默认 Dream 规则。"
+                "删除或清空文件即可恢复默认规则。"
             )
     elif args:
-        content = "Usage: /dream-prompt [init]"
+        content = "用法：/dream-prompt [init]"
     elif store.has_dream_prompt_override():
         content = (
-            "Dream memory instructions: custom for this workspace\n\n"
-            f"- Path: `{display_path}`\n"
-            "- Delete or empty this file to return to nanobot's default."
+            "Dream 记忆整理规则：当前工作区自定义\n\n"
+            f"- 路径：`{display_path}`\n"
+            "- 删除或清空此文件即可恢复 nanobot 默认规则。"
         )
     else:
         content = (
-            "Dream memory instructions: nanobot default\n\n"
-            f"- Editable file: `{display_path}`\n"
-            "- Run `/dream-prompt init` to create an editable copy."
+            "Dream 记忆整理规则：nanobot 默认\n\n"
+            f"- 可编辑文件：`{display_path}`\n"
+            "- 运行 `/dream-prompt init` 创建可编辑副本。"
         )
 
     return OutboundMessage(
@@ -521,30 +521,30 @@ async def cmd_evaluator_prompt(ctx: CommandContext) -> OutboundMessage:
     if args == "init":
         if not initialize_workspace_prompt(path, default_evaluator_prompt()):
             content = (
-                f"Heartbeat evaluator prompt already exists at `{display_path}`.\n\n"
-                "Edit that file, or delete/empty it to return to nanobot's default."
+                f"心跳通知审核提示词文件已存在：`{display_path}`。\n\n"
+                "可直接编辑该文件；删除或清空文件即可恢复 nanobot 默认提示词。"
             )
         else:
             content = (
-                f"Created heartbeat evaluator prompt at `{display_path}`.\n\n"
-                "Edit that file to control when the heartbeat notification gate speaks. "
-                "It must still instruct the model to call the `evaluate_notification` tool, "
-                "otherwise the gate fails closed and stays silent. "
-                "Delete or empty it to return to nanobot's default."
+                f"已创建心跳通知审核提示词文件：`{display_path}`。\n\n"
+                "编辑该文件可控制何时发送心跳通知。"
+                "提示词仍须要求模型调用 `evaluate_notification` 工具，"
+                "否则审核会拒绝放行，不发送通知。"
+                "删除或清空文件即可恢复 nanobot 默认提示词。"
             )
     elif args:
-        content = "Usage: /evaluator-prompt [init]"
+        content = "用法：/evaluator-prompt [init]"
     elif has_evaluator_prompt_override(workspace):
         content = (
-            "Heartbeat evaluator prompt: custom for this workspace\n\n"
-            f"- Path: `{display_path}`\n"
-            "- Delete or empty this file to return to nanobot's default."
+            "心跳通知审核提示词：当前工作区自定义\n\n"
+            f"- 路径：`{display_path}`\n"
+            "- 删除或清空此文件即可恢复 nanobot 默认提示词。"
         )
     else:
         content = (
-            "Heartbeat evaluator prompt: nanobot default\n\n"
-            f"- Editable file: `{display_path}`\n"
-            "- Run `/evaluator-prompt init` to create an editable copy."
+            "心跳通知审核提示词：nanobot 默认\n\n"
+            f"- 可编辑文件：`{display_path}`\n"
+            "- 运行 `/evaluator-prompt init` 创建可编辑副本。"
         )
 
     return OutboundMessage(
@@ -557,19 +557,19 @@ async def cmd_evaluator_prompt(ctx: CommandContext) -> OutboundMessage:
 
 def _format_dream_no_input_message() -> str:
     return "\n".join([
-        "Dream has no conversation history to process yet.",
+        "Dream 暂无可处理的对话历史。",
         "",
-        "Dream reads new entries from `memory/history.jsonl` after the current Dream cursor.",
+        "Dream 从 `memory/history.jsonl` 读取当前处理游标之后的新记录。",
         (
-            "Short chats only reach that file after token compaction or idle auto-compact, "
-            "so a fresh or short WebUI chat may leave Dream with no input."
+            "短对话只有在触发 token 压缩或空闲自动压缩后才会写入该文件，"
+            "因此新建或较短的 WebUI 对话可能尚无 Dream 可处理的内容。"
         ),
         "",
-        "Next steps:",
-        "- Enable `agents.defaults.idleCompactAfterMinutes` so completed chats become Dream input automatically.",
-        "- Compact the current chat into memory once that manual action is available.",
-        "- If you expected history to exist, check whether `memory/history.jsonl` has new entries after the Dream cursor.",
-        "- Use `/dream-prompt` to see or change how Dream organizes memory.",
+        "接下来可以：",
+        "- 启用 `agents.defaults.idleCompactAfterMinutes`，让结束的对话自动成为 Dream 的输入。",
+        "- 手动压缩操作可用时，将当前对话压缩到记忆中。",
+        "- 如果预期已有历史，请检查 `memory/history.jsonl` 在 Dream 处理游标之后是否有新记录。",
+        "- 使用 `/dream-prompt` 查看或修改 Dream 记忆整理规则。",
     ])
 
 
@@ -595,7 +595,7 @@ def _extract_changed_files(diff: str) -> list[str]:
 def _format_changed_files(diff: str) -> str:
     files = _extract_changed_files(diff)
     if not files:
-        return "No tracked memory files changed."
+        return "受版本管理的记忆文件没有变更。"
     return ", ".join(f"`{path}`" for path in files)
 
 
@@ -610,18 +610,18 @@ def _format_dream_log_content(
 ) -> str:
     files_line = _format_changed_files(diff)
     lines = [
-        "## Dream Update",
+        "## Dream 记忆变更",
         "",
-        "Here is the selected Dream memory change." if requested_sha else "Here is the latest Dream memory change.",
+        "以下是指定的 Dream 记忆变更。" if requested_sha else "以下是最新的 Dream 记忆变更。",
         "",
-        f"- Commit: `{commit.sha}`",
-        f"- Time: {commit.timestamp}",
-        f"- Changed files: {files_line}",
+        f"- 提交：`{commit.sha}`",
+        f"- 时间：{commit.timestamp}",
+        f"- 变更文件：{files_line}",
     ]
     if diff:
         lines.extend([
             "",
-            f"Use `/dream-restore {commit.sha}` to undo this change.",
+            f"使用 `/dream-restore {commit.sha}` 撤销这次变更。",
             "",
             "```diff",
             diff.rstrip(),
@@ -630,24 +630,24 @@ def _format_dream_log_content(
     else:
         lines.extend([
             "",
-            "Dream recorded this version, but there is no file diff to display.",
+            "Dream 已记录此版本，但没有可显示的文件差异。",
         ])
     return "\n".join(lines)
 
 
 def _format_dream_restore_list(commits: list[CommitInfo]) -> str:
     lines = [
-        "## Dream Restore",
+        "## Dream 记忆恢复",
         "",
-        "Choose a Dream memory version to restore. Latest first:",
+        "选择要恢复的 Dream 记忆版本，最新版本在前：",
         "",
     ]
     for c in commits:
         lines.append(f"- `{c.sha}` {c.timestamp} - {c.subject()}")
     lines.extend([
         "",
-        "Preview a version with `/dream-log <sha>` before restoring it.",
-        "Restore a version with `/dream-restore <sha>`.",
+        "恢复前可使用 `/dream-log <sha>` 预览版本。",
+        "使用 `/dream-restore <sha>` 恢复版本。",
     ])
     return "\n".join(lines)
 
@@ -664,11 +664,11 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
     if not git.is_initialized():
         if store.get_last_dream_cursor() == 0:
             msg = (
-                "Dream has not run yet. Run `/dream`, or wait for the next scheduled Dream cycle.\n\n"
-                "Use `/dream-prompt` to see or change how Dream organizes memory."
+                "Dream 尚未运行。可运行 `/dream`，或等待下一次定时 Dream 任务。\n\n"
+                "使用 `/dream-prompt` 查看或修改 Dream 记忆整理规则。"
             )
         else:
-            msg = "Dream history is not available because memory versioning is not initialized."
+            msg = "记忆版本管理尚未初始化，无法查看 Dream 历史。"
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
             content=msg, metadata={"render_as": "text"},
@@ -681,9 +681,9 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
         result = git.show_commit_diff(sha)
         if not result:
             content = (
-                f"Couldn't find Dream change `{sha}`.\n\n"
-                "Use `/dream-restore` to list recent versions, "
-                "or `/dream-log` to inspect the latest one."
+                f"找不到 Dream 变更 `{sha}`。\n\n"
+                "使用 `/dream-restore` 列出近期版本，"
+                "或使用 `/dream-log` 查看最新版本。"
             )
         else:
             commit, diff = result
@@ -703,8 +703,8 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
             content = _format_dream_log_content(commit, diff)
         else:
             content = (
-                "Dream memory has no saved versions yet.\n\n"
-                "Use `/dream-prompt` to see or change how Dream organizes memory."
+                "Dream 记忆尚无已保存的版本。\n\n"
+                "使用 `/dream-prompt` 查看或修改 Dream 记忆整理规则。"
             )
 
     return OutboundMessage(
@@ -725,14 +725,14 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
     if not git.is_initialized():
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-            content="Dream history is not available because memory versioning is not initialized.",
+            content="记忆版本管理尚未初始化，无法查看 Dream 历史。",
         )
 
     args = ctx.args.strip()
     if not args:
         commits = git.log(max_entries=10, message_prefix=_DREAM_COMMIT_PREFIX)
         if not commits:
-            content = "Dream memory has no saved versions to restore yet."
+            content = "Dream 记忆尚无可恢复的已保存版本。"
         else:
             content = _format_dream_restore_list(commits)
     else:
@@ -740,24 +740,24 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
         result = git.show_commit_diff(sha, message_prefix=_DREAM_COMMIT_PREFIX)
         if not result:
             content = (
-                f"Couldn't restore Dream change `{sha}`.\n\n"
-                "Only Dream memory versions can be restored. "
-                "Use `/dream-restore` to list recent versions."
+                f"无法恢复 Dream 变更 `{sha}`。\n\n"
+                "只能恢复 Dream 记忆版本。"
+                "使用 `/dream-restore` 列出近期版本。"
             )
         else:
             changed_files = _format_changed_files(result[1])
             new_sha = git.revert(sha, message_prefix=_DREAM_COMMIT_PREFIX)
             if new_sha:
                 content = (
-                    f"Restored Dream memory to the state before `{sha}`.\n\n"
-                    f"- New safety commit: `{new_sha}`\n"
-                    f"- Restored files: {changed_files}\n\n"
-                    f"Use `/dream-log {new_sha}` to inspect the restore diff."
+                    f"已将 Dream 记忆恢复至 `{sha}` 变更之前的状态。\n\n"
+                    f"- 新建的安全提交：`{new_sha}`\n"
+                    f"- 已恢复文件：{changed_files}\n\n"
+                    f"使用 `/dream-log {new_sha}` 查看恢复产生的差异。"
                 )
             else:
                 content = (
-                    f"Couldn't restore Dream change `{sha}`.\n\n"
-                    "It may be the first saved version with no earlier state to restore."
+                    f"无法恢复 Dream 变更 `{sha}`。\n\n"
+                    "这可能是首个已保存版本，没有更早的状态可供恢复。"
                 )
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
@@ -789,7 +789,7 @@ def _format_history_message(msg: dict[str, Any]) -> str | None:
         return None
     if len(content) > _HISTORY_MAX_CONTENT_CHARS:
         content = content[:_HISTORY_MAX_CONTENT_CHARS] + "…"
-    label = "👤 You" if role == "user" else "🤖 Bot"
+    label = "👤 你" if role == "user" else "🤖 助手"
     return f"{label}: {content}"
 
 
@@ -805,7 +805,7 @@ async def cmd_history(ctx: CommandContext) -> OutboundMessage:
         except ValueError:
             return OutboundMessage(
                 channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-                content="Usage: /history [count] — e.g. /history 5 (default: 10, max: 50)",
+                content="用法：/history [count] — 例如 /history 5（默认 10 条，最多 50 条）",
                 metadata=dict(ctx.msg.metadata or {}),
             )
 
@@ -818,11 +818,11 @@ async def cmd_history(ctx: CommandContext) -> OutboundMessage:
     if not recent:
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-            content="No conversation history yet.",
+            content="暂无对话历史。",
             metadata=dict(ctx.msg.metadata or {}),
         )
 
-    header = f"Last {len(recent)} message(s):\n"
+    header = f"最近 {len(recent)} 条消息：\n"
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content=header + "\n".join(recent),
@@ -852,9 +852,9 @@ async def cmd_skill(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     skills = loop.context.skills.list_skills(filter_unavailable=False)
     if not skills:
-        content = "No skills available."
+        content = "暂无可用技能。"
     else:
-        lines = [f"Available skills ({len(skills)}):", ""]
+        lines = [f"可用技能（{len(skills)}）：", ""]
         for entry in skills:
             desc = loop.context.skills.get_skill_description(entry["name"])
             lines.append(f"- **{entry['name']}** — {desc}")
@@ -875,8 +875,8 @@ async def cmd_trigger(ctx: CommandContext) -> OutboundMessage:
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
             content=(
-                "Usage: /trigger <name>\n\n"
-                "Create a named local trigger bound to this chat session."
+                "用法：/trigger <name>\n\n"
+                "创建绑定当前会话的命名本地触发器。"
             ),
             metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
         )
@@ -908,9 +908,9 @@ async def cmd_trigger(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content=(
-            f"Trigger created: {trigger.name}\n"
+            f"已创建触发器：{trigger.name}\n"
             f"ID: {trigger.id}\n\n"
-            f"Command:\n{command}"
+            f"命令：\n{command}"
         ),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
@@ -927,7 +927,7 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
 
 def build_help_text(specs: tuple[BuiltinCommandSpec, ...] = CORE_COMMAND_SPECS) -> str:
     """Build help text for the commands registered in one application."""
-    lines = ["🐈 nanobot commands:"]
+    lines = ["🐈 nanobot 命令："]
     for spec in specs:
         command = spec.command
         if spec.arg_hint:

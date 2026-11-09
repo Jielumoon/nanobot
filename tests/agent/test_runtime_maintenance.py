@@ -383,7 +383,7 @@ async def test_idle_storage_scan_does_not_delay_stop(agent, monkeypatch):
         async with asyncio.timeout(3):
             while True:
                 reply = await agent.bus.consume_outbound()
-                if reply.content == "Stopped 1 task(s).":
+                if reply.content == "已停止 1 个任务。":
                     break
         assert not consumer.done()
         assert not release_scan.is_set()
