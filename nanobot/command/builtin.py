@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 
 from nanobot import __version__
+from nanobot.agent.dream import dream_running, run_dream
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.command.spec import BuiltinCommandSpec
@@ -390,70 +391,37 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
     loop = ctx.loop
     msg = ctx.msg
 
+    if dream_running(loop.context.memory.workspace):
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="正在整理 Dream 记忆……",
+        )
+
     async def _run_dream():
-        from nanobot.agent.memory import MemoryStore
-
-        async def _silent(*_args: Any, **_kwargs: Any) -> None:
-            pass
-
-        dream_session_key = MemoryStore.dream_session_key
-        build_dream_commit_message = MemoryStore.build_dream_commit_message
-
-        store = loop.context.memory
-        content = ""
-        resp = None
-        diff_body = ""
-        t0 = time.monotonic()
+        started = time.monotonic()
+        metadata: dict[str, Any] = {}
         try:
-            result = store.build_dream_prompt()
-            if result is None:
-                await loop.bus.publish_outbound(OutboundMessage(
-                    channel=msg.channel, chat_id=msg.chat_id,
-                    content=_format_dream_no_input_message(),
-                    metadata={"render_as": "text"},
-                ))
+            result = await run_dream(loop, trigger="manual")
+            if result.status == "busy":
                 return
-            prompt, last_cursor = result
-            key = dream_session_key()
-            dream_runtime = loop.dream_runtime()
-            resp = await loop.process_direct(
-                prompt,
-                session_key=key,
-                ephemeral=True,
-                tools=store.build_dream_tools(),
-                on_progress=_silent,
-                runtime=dream_runtime,
-            )
-            elapsed = time.monotonic() - t0
-            # The real file delta grounds the audit record; normal completion
-            # decides whether this history batch has finished processing.
-            diff_body = store.dream_content_diff()
-            completed = MemoryStore.dream_run_completed(resp)
-            if completed:
-                store.set_last_dream_cursor(last_cursor)
-                if diff_body:
-                    content = f"Dream 记忆整理完成，用时 {elapsed:.1f}s。"
-                else:
-                    content = f"Dream 记忆整理完成，用时 {elapsed:.1f}s；记忆无变更。"
-            else:
-                reason = MemoryStore.dream_incompletion_reason(resp)
+            if result.status == "empty":
+                content = _format_dream_no_input_message()
+                metadata["render_as"] = "text"
+            elif result.status == "completed":
                 content = (
-                    f"Dream 记忆整理未完成，用时 {elapsed:.1f}s（{reason}）；"
+                    f"Dream 记忆整理完成，用时 {result.elapsed:.1f}s。" if result.changed
+                    else f"Dream 记忆整理完成，用时 {result.elapsed:.1f}s；记忆无变更。"
+                )
+            else:
+                content = (
+                    f"Dream 记忆整理未完成，用时 {result.elapsed:.1f}s（{result.reason}）；"
                     "记忆处理游标未推进。"
                 )
-        except Exception as e:
-            elapsed = time.monotonic() - t0
-            content = f"Dream 记忆整理失败，用时 {elapsed:.1f}s：{e}"
-        finally:
-            if store.git.is_initialized():
-                commit_msg = build_dream_commit_message("dream: manual run", diff_body)
-                sha = store.git.auto_commit(commit_msg)
-                if sha:
-                    content += f"（提交 {sha}）"
-            store.compact_history()
-            await loop.sessions.state.prune_dream_sessions()
+            if result.sha:
+                content += f"（提交 {result.sha}）"
+        except Exception as exc:
+            content = f"Dream 记忆整理失败，用时 {time.monotonic() - started:.1f}s：{exc}"
         await loop.bus.publish_outbound(OutboundMessage(
-            channel=msg.channel, chat_id=msg.chat_id, content=content,
+            channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=metadata,
         ))
 
     asyncio.create_task(_run_dream())
@@ -746,7 +714,7 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
             )
         else:
             changed_files = _format_changed_files(result[1])
-            new_sha = git.revert(sha, message_prefix=_DREAM_COMMIT_PREFIX)
+            new_sha = store.restore_memory(sha, message_prefix=_DREAM_COMMIT_PREFIX)
             if new_sha:
                 content = (
                     f"已将 Dream 记忆恢复至 `{sha}` 变更之前的状态。\n\n"

@@ -13,7 +13,7 @@ import weakref
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -22,14 +22,19 @@ from loguru import logger
 from nanobot.agent.memory_claims import (
     ClaimStore,
     ForgetResult,
+    RememberResult,
 )
 from nanobot.agent.memory_documents import (
+    ClaimDraft,
     Clock,
     DailyNotes,
+    MemoryDocuments,
+    digest,
     redact_history_lines,
     strip_claim_markers,
     utc_now,
 )
+from nanobot.agent.memory_dreams import DreamBatch, DreamNotes, DreamSource
 from nanobot.config.schema import MemoryConfig
 from nanobot.events import NO_EVENTS, CompactionReason, ContextCompactionEvent, EventSink
 from nanobot.llm_usage.context import llm_usage_source
@@ -39,7 +44,7 @@ from nanobot.runtime_context import public_history_messages
 from nanobot.session.manager import Session, SessionManager
 from nanobot.session.summary import is_summary_checkpoint, session_summary_from_metadata
 from nanobot.utils.atomic_file import atomic_write_text
-from nanobot.utils.gitstore import GitStore
+from nanobot.utils.gitstore import GitStore, GitStoreError
 from nanobot.utils.helpers import (
     atomic_write_lines,
     build_assistant_message,
@@ -104,6 +109,9 @@ class MemoryStore:
         self._oversize_logged = False
         self._dream_prompt_oversize_logged = False
         self._append_lock = threading.RLock()
+        self.dreams = DreamNotes(
+            MemoryDocuments(workspace), lock=self._append_lock, clock=clock, timezone=self.timezone,
+        )
         self.daily: DailyNotes | None = (
             DailyNotes(self.memory_dir, timezone=self.timezone, clock=clock, lock=self._append_lock)
             if self.config.daily_notes else None
@@ -115,7 +123,7 @@ class MemoryStore:
         self._git = GitStore(
             workspace,
             tracked_files=["SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor", "memory/ledger.md"],
-            tracked_dirs=["memory/daily", "memory/bank", "memory/people", "memory/projects"],
+            tracked_dirs=["memory/daily", "memory/bank", "memory/people", "memory/projects", "dreams"],
             restore_excluded=["memory/ledger.md"],
         )
         self._maybe_migrate_legacy_history()
@@ -354,6 +362,7 @@ class MemoryStore:
         query: str | None = None,
         all_matches: bool = False,
         person: str | None = None, project: str | None = None,
+        actor: str = "user", run_id: str | None = None,
     ) -> tuple[ForgetResult, int]:
         """Retract claims and matching entries, then redact them from history.jsonl.
 
@@ -367,6 +376,7 @@ class MemoryStore:
             result = self.claims.forget(
                 claim_ids=claim_ids or [], query=query, all_matches=all_matches,
                 history_entries=entries, person=person, project=project,
+                actor=actor, run_id=run_id,
             )
             redacted = (
                 self.reconcile_history() if not result.candidates and not result.needs_confirmation
@@ -668,39 +678,148 @@ class MemoryStore:
             return text
         return self.default_dream_prompt()
 
-    def build_dream_prompt(self, *, max_entries: int = 20) -> tuple[str, int] | None:
-        """Build the Dream prompt with unprocessed history context.
+    def build_dream_prompt(
+        self, *, max_entries: int = 20, run_id: str | None = None,
+    ) -> DreamBatch | None:
+        """Snapshot a bounded batch and its exact, runtime-owned evidence handles."""
+        with self._append_lock:
+            entries = self.read_unprocessed_history(self.get_last_dream_cursor())[:max_entries]
+            if not entries:
+                return None
+            sources: dict[str, DreamSource] = {}
+            history: list[str] = []
+            for entry in entries:
+                cursor = entry["cursor"]
+                lines = tuple(
+                    line for line in entry["content"].splitlines()
+                    if line.strip() and "[已遗忘]" not in line
+                )
+                if not lines:
+                    continue
+                source = DreamSource(cursor, entry["timestamp"], entry.get("session_key"), lines)
+                handle = f"h:{cursor}"
+                sources[handle] = source
+                history.append(f"[{handle}] [{source.timestamp}] (conversation summary)")
+                remaining = 1000
+                for number, line in enumerate(lines, 1):
+                    if remaining <= 0:
+                        break
+                    line_handle = f"{handle}:{number}"
+                    sources[line_handle] = DreamSource(
+                        cursor, source.timestamp, source.session_key, (line,),
+                    )
+                    history.append(f"[{line_handle}] {truncate_text(line, remaining)}")
+                    remaining -= len(line) + 1
+            sections = [self._dream_template()]
+            if self.claims is not None or self.daily is not None:
+                sections.append(render_template(
+                    "agent/dream_claims.md", strip=True,
+                    claims_enabled=self.claims is not None, daily_notes=self.daily is not None,
+                ))
+            pending = self.dreams.pending()
+            if pending:
+                sections.append(
+                    "## Pending questions (unverified; not evidence)\n" + pending,
+                )
+            prompt = "\n\n".join(sections) + "\n\n## Conversation History\n" + "\n".join(history)
+            return DreamBatch(prompt, entries[-1]["cursor"], sources, run_id or uuid4().hex)
 
-        Returns ``(prompt, last_cursor)`` or ``None`` if nothing to process.
+    def _check_dream_source(self, source: DreamSource) -> None:
+        current = next((
+            entry for entry, cursor in self._iter_valid_entries() if cursor == source.cursor
+        ), None)
+        tombstones = self.dreams.documents.tombstones()
+        if current is None or any(
+            "[已遗忘]" in line
+            or ("history", f"{source.cursor}:{digest(line)}") in tombstones
+            or line not in current["content"].splitlines()
+            for line in source.lines
+        ):
+            raise ValueError("该来源已被遗忘或修改，请跳过，不要重新写入其内容")
 
-        The current contents of the durable memory files (SOUL.md, USER.md,
-        memory/MEMORY.md) reach Dream through the normal agent system context.
-        """
+    def remember_from_history(
+        self, draft: ClaimDraft, source: DreamSource, *, run_id: str,
+    ) -> RememberResult:
+        if self.claims is None:
+            raise RuntimeError("memory claims are disabled")
+        with self._append_lock:
+            self._check_dream_source(source)
+            if draft.person and not draft.quote:
+                raise ValueError("人物记忆需要来源中的原话 quote；推断请放入待确认")
+            if draft.quote and draft.quote not in " ".join(" ".join(source.lines).split()):
+                raise ValueError("quote 不在所选来源中，请核对原话或跳过")
+            return self.claims.remember(
+                draft, actor="dream", run_id=run_id,
+                source_ref=f"history:{source.cursor}", session_key=source.session_key,
+                source_timestamp=source.timestamp, source_kind="summary",
+            )
+
+    def reflect(
+        self, section: Literal["反思", "待确认"], lines: list[str], *, batch: DreamBatch,
+    ) -> None:
+        with self._append_lock:
+            for handle, source in batch.sources.items():
+                if handle.count(":") == 1:
+                    self._check_dream_source(source)
+            self.dreams.append(section, [f"- {line}" for line in lines])
+
+    def maintain_memory(self, *, run_id: str) -> None:
         if self.claims is not None:
-            # Expiry is code-enforced on Dream's schedule rather than left to the model.
-            self.claims.expire_due()
+            self.claims.expire_due(actor="dream", run_id=run_id)
             self.reconcile_files()
-        last_cursor = self.get_last_dream_cursor()
-        entries = self.read_unprocessed_history(since_cursor=last_cursor)
-        if not entries:
-            return None
 
-        batch = entries[:max_entries]
-        history_text = "\n".join(
-            f"[{e['timestamp']}] {truncate_text(e['content'], 1000)}"
-            for e in batch
-        )
-        template = self._dream_template()
-        sections = [template]
-        if self.claims is not None or self.daily is not None:
-            sections.append(render_template(
-                "agent/dream_claims.md",
-                strip=True,
-                claims_enabled=self.claims is not None,
-                daily_notes=self.daily is not None,
-            ))
-        prompt = "\n\n".join(sections) + f"\n\n## Conversation History\n{history_text}"
-        return (prompt, batch[-1]["cursor"])
+    def finish_dream(
+        self, *, run_id: str, status: str, cursor: int | None, prefix: str,
+    ) -> tuple[bool, str | None]:
+        """Commit content, then an audit referencing that commit; advance only on success."""
+        with self._append_lock:
+            diff = self.dream_content_diff()
+            events = [event for event in self.dreams.documents.events() if event.run_id == run_id]
+            if status == "empty" and not diff and not events:
+                return False, None
+            sha = self.git.auto_commit(self.build_dream_commit_message(prefix, diff))
+            state = {
+                "empty": "维护完成", "completed": "完成", "incomplete": "未完成", "failed": "失败",
+            }[status]
+            actions = {
+                "remember": "记住", "supersede": "取代", "expire": "过期",
+                "forget": "遗忘", "update": "更新",
+            }
+            lines = [f"- run_id={run_id}；状态={state}；内容提交={sha or '无内容提交'}"]
+            claims = self.claims
+            tombstones = self.dreams.documents.tombstones()
+            for event in events:
+                detail = ""
+                marker = ""
+                if event.target_type == "claim" and claims is not None:
+                    marker = f" <!-- audit-claim:{event.target_id} -->"
+                    claim = claims.get(event.target_id)
+                    if ("claim", event.target_id) in tombstones:
+                        detail = "已遗忘"
+                    elif claim is not None:
+                        detail = claim.text[:180]
+                lines.append(
+                    f"- run_id={run_id}；{actions[event.action]} {event.target_type}:{event.target_id}"
+                    f"；{detail}{marker}"
+                )
+            self.dreams.append("变更审计", lines)
+            previous = self.get_last_dream_cursor()
+            if cursor is not None:
+                self.set_last_dream_cursor(cursor)
+            try:
+                self.git.auto_commit(f"dream-audit: {run_id}")
+            except GitStoreError:
+                if cursor is not None:
+                    self.set_last_dream_cursor(previous)
+                raise
+            return bool(diff), sha
+
+    def restore_memory(self, sha: str, *, message_prefix: str = "dream:") -> str | None:
+        with self._append_lock:
+            if not self.git.restore_snapshot(sha, message_prefix=message_prefix):
+                return None
+            self.reconcile_files()
+            return self.git.auto_commit(f"revert: undo {sha}")
 
     def dream_content_diff(self) -> str:
         """Structured summary of uncommitted changes to the durable memory files.
@@ -711,31 +830,36 @@ class MemoryStore:
         if not self._git.is_initialized():
             return ""
         paths: list[str] = list(self._DREAM_CONTENT_PATHS)
-        folders = (
-            ("memory/bank/", "memory/people/", "memory/projects/", "memory/daily/")
-            if self.claims is not None else ("memory/daily/",) if self.daily is not None else ()
-        )
+        folders = ("dreams/",)
+        if self.claims is not None:
+            folders += ("memory/bank/", "memory/people/", "memory/projects/", "memory/daily/")
+        elif self.daily is not None:
+            folders += ("memory/daily/",)
         paths.extend(path for path in self._git.tracked_paths() if path.startswith(folders))
         return self._git.summarize_working_tree(paths)
 
-    def build_dream_tools(self) -> ToolRegistry:
+    def build_dream_tools(self, batch: DreamBatch) -> ToolRegistry:
         """Build the restricted tool registry used by Dream runs."""
         from nanobot.agent.skill_metadata import BUILTIN_SKILLS_DIR
         from nanobot.agent.tools.apply_patch import ApplyPatchTool
         from nanobot.agent.tools.file_state import FileStates
         from nanobot.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        from nanobot.agent.tools.memory_reflect import MemoryReflectTool
         from nanobot.agent.tools.registry import ToolRegistry
 
         tools = ToolRegistry()
+        tools.register(MemoryReflectTool(self, batch))
         file_states = FileStates()
         workspace = self.workspace
         skills_dir = workspace / "skills"
         skills_dir.mkdir(parents=True, exist_ok=True)
 
         extra_read = [BUILTIN_SKILLS_DIR] if BUILTIN_SKILLS_DIR.exists() else None
-        editable_files = [self.memory_file, self.soul_file, self.user_file]
+        editable_files = [self.soul_file]
         editable_dirs: list[Path] = []
-        if self.daily is not None:
+        if self.claims is None:
+            editable_files.extend([self.memory_file, self.user_file])
+        if self.daily is not None and self.claims is None:
             self.daily.dir.mkdir(parents=True, exist_ok=True)
             editable_dirs.append(self.daily.dir)
 
@@ -775,10 +899,10 @@ class MemoryStore:
                 MemorySearchTool,
             )
 
-            tools.register(MemoryRememberTool(self))
+            tools.register(MemoryRememberTool(self, dream=batch))
             tools.register(MemorySearchTool(self))
-            tools.register(MemoryForgetTool(self))
-            tools.register(MemoryProjectTool(self))
+            tools.register(MemoryForgetTool(self, dream=batch))
+            tools.register(MemoryProjectTool(self, dream=batch))
             tools.register(MemoryExplainTool(self))
         return tools
 
@@ -876,11 +1000,6 @@ class MemoryStore:
         )
         return self._normalize_history_entry(checkpoint, max_chars=limit)
 
-
-    @staticmethod
-    def dream_session_key() -> str:
-        """Return a unique session key for a Dream run, e.g. ``dream:20260528-100000``."""
-        return f"dream:{datetime.now():%Y%m%d-%H%M%S}"
 
     @staticmethod
     def build_dream_commit_message(prefix: str, diff_body: str) -> str:

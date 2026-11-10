@@ -17,6 +17,7 @@ from nanobot.agent.memory_documents import (
     is_claim_id,
     normalize_entity_name,
 )
+from nanobot.agent.memory_dreams import DreamBatch
 from nanobot.agent.memory_recall import MemoryRuntimeContext
 from nanobot.agent.tools.base import Tool, ToolResult, tool_parameters
 from nanobot.agent.tools.context import current_request_context
@@ -43,11 +44,12 @@ def _dump(payload: dict[str, Any]) -> str:
 class _MemoryClaimTool(Tool):
     """Shared construction for tools that need the agent's claim ledger."""
 
-    def __init__(self, store: MemoryStore) -> None:
+    def __init__(self, store: MemoryStore, *, dream: DreamBatch | None = None) -> None:
         if store.claims is None:
             raise RuntimeError(f"{type(self).__name__} requires memory claims to be enabled")
         self._store = store
         self._claims = store.claims
+        self._dream = dream
 
     @classmethod
     def enabled(cls, ctx: ToolContext) -> bool:
@@ -111,6 +113,10 @@ class _MemoryClaimTool(Tool):
             StringSchema("Explicit person alias"), max_items=10,
             description="Known aliases for person; never infer nicknames.",
         ),
+        source=StringSchema(
+            "Dream only: an evidence handle from this batch, such as h:123 or h:123:2. "
+            "Line handles let unaffected lines remain usable after another line is forgotten.",
+        ),
         required=["text", "kind"],
     )
 )
@@ -147,6 +153,7 @@ class MemoryRememberTool(_MemoryClaimTool):
         supersedes: list[str] | None = None,
         project: str | None = None, person: str | None = None,
         aliases: list[str] | None = None,
+        source: str | None = None,
         **kwargs: Any,
     ) -> str:
         if person is not None and not self._store.config.people.enabled:
@@ -162,16 +169,26 @@ class MemoryRememberTool(_MemoryClaimTool):
                 "supersedes": supersedes if supersedes is not None else [],
                 "project": project, "person": person, "aliases": aliases or [],
             }, context={"timezone": self._store.timezone})
-            result = self._claims.remember(
-                draft,
-                session_key=session_key,
-                message_id=ctx.message_id if ctx is not None else None,
-                source_ref=(
-                    f"session:{session_key}#{ctx.message_id}"
-                    if ctx is not None and ctx.persist_session and session_key and ctx.message_id
-                    else None
-                ),
-            )
+            if self._dream is not None:
+                handle = (source or "").strip().removeprefix("[").removesuffix("]")
+                if handle not in self._dream.sources:
+                    return ToolResult.error("来源不在本批次，请使用给定的 history handle；无来源则跳过")
+                result = self._store.remember_from_history(
+                    draft, self._dream.sources[handle], run_id=self._dream.run_id,
+                )
+            else:
+                if source is not None:
+                    return ToolResult.error("source 仅用于 Dream；当轮记忆来源由运行时提供")
+                result = self._claims.remember(
+                    draft, session_key=session_key,
+                    message_id=ctx.message_id if ctx is not None else None,
+                    source_ref=(
+                        f"session:{session_key}#{ctx.message_id}"
+                        if ctx is not None and ctx.persist_session and session_key and ctx.message_id
+                        else None
+                    ),
+                    source_kind="message",
+                )
         except ValidationError as exc:
             fields = "、".join(str(error["loc"][0]) for error in exc.errors())
             return ToolResult.error(f"记忆参数无效：{fields}。请检查取值、长度和日期格式。")
@@ -301,6 +318,8 @@ class MemoryForgetTool(_MemoryClaimTool):
                 all_matches=all_matches,
                 person=normalize_entity_name(person) if person is not None else None,
                 project=normalize_entity_name(project) if project is not None else None,
+                actor="dream" if self._dream is not None else "user",
+                run_id=self._dream.run_id if self._dream is not None else None,
             )
         except ValueError as exc:
             return ToolResult.error(f"无法遗忘记忆：{exc}")
@@ -358,6 +377,8 @@ class MemoryProjectTool(_MemoryClaimTool):
             entity = self._claims.update_project(
                 normalize_entity_name(project), status,
                 rename=normalize_entity_name(rename) if rename is not None else None,
+                actor="dream" if self._dream is not None else "user",
+                run_id=self._dream.run_id if self._dream is not None else None,
             )
         except ValueError as exc:
             return ToolResult.error(f"无法更新项目：{exc}")

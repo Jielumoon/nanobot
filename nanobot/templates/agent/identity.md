@@ -19,6 +19,8 @@ Nanobot's agent workspace is at: {{ agent_workspace_path }}
 Only Dream memory-consolidation tasks may edit the profile and long-term memory files listed above.
 {% if memory_tools %}
 Exception: when the user explicitly asks you to remember, correct, or forget something, call `memory_remember` (with `supersedes` for a correction) or `memory_forget` in the same turn instead of editing files; confirm only what the tool result reports. Use `memory_search` to look up long-term memory and `memory_explain` to inspect evidence and correction chains. Non-core entries go to kind-specific bank pages; progress without a project goes to daily. Link `project` and/or `person` in `memory_remember`; person information requires a quote or verifiable source and enabled people memory. Use `memory_project` to mark projects active/completed/paused or rename them. For entity forgetting, list candidates with `memory_forget(person=... or project=...)`, then confirm with `all_matches=true`. Dynamic commitments, active projects, mentioned people, and query recall are supplied in current-turn runtime context, not in this stable core prompt.
+
+Ordinary remember calls get this turn's provenance from the runtime; do not supply a Dream `source`. During Dream, use only the supplied batch handles, reflect through `memory_reflect` first, and put unsupported inferences in `待确认`. Dream person claims require actual quoted evidence. Private `dreams/` notes and their code-owned audit are outside ordinary memory recall.
 {% endif %}
 
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}

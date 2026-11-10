@@ -204,8 +204,9 @@ def test_forget_id_scrubs_daily_history_and_database_and_dream(tmp_path):
     assert "Luna" not in store.daily.path_for().read_text()
     with sqlite3.connect(store.claims.db_path) as conn:
         assert "Luna" not in "\n".join(conn.iterdump())
-    prompt, _ = store.build_dream_prompt()
-    assert "养了一只叫 Luna 的猫" not in prompt and "继续完成项目" in prompt
+    batch = store.build_dream_prompt()
+    assert batch is not None
+    assert "养了一只叫 Luna 的猫" not in batch.prompt and "继续完成项目" in batch.prompt
 
 
 def test_history_only_forget_and_restored_history_stays_filtered(tmp_path):
@@ -222,9 +223,11 @@ def test_history_only_forget_and_restored_history_stays_filtered(tmp_path):
     store.claims.db_path.unlink()
     assert store.read_unprocessed_history(0)[0]["content"] == "# 新增标题\n" + expected
     assert "秘密" in store.history_file.read_text()
-    prompt, _ = store.build_dream_prompt()
-    assert "只有历史里有的秘密" not in prompt
-    assert "保留的项目进度" in prompt and "下周开会" in prompt
+    batch = store.build_dream_prompt()
+    assert batch is not None
+    assert "只有历史里有的秘密" not in batch.prompt
+    assert "保留的项目进度" in batch.prompt and "下周开会" in batch.prompt
+    store.reconcile_files()
     assert "秘密" not in store.history_file.read_text()
     assert store.reconcile_history() == 0
 
@@ -530,4 +533,7 @@ def test_history_timestamp_keeps_local_display_format_with_injected_clock(tmp_pa
     store = MemoryStore(tmp_path, timezone="Asia/Shanghai", clock=lambda: now)
     store.append_history("- 今天完成计划")
     assert store.read_unprocessed_history(0)[0]["timestamp"] == "2030-05-04 00:30"
-    assert "[2030-05-04 00:30] - 今天完成计划" in store.build_dream_prompt()[0]
+    batch = store.build_dream_prompt()
+    assert batch is not None
+    assert "[h:1] [2030-05-04 00:30]" in batch.prompt
+    assert "[h:1:1] - 今天完成计划" in batch.prompt

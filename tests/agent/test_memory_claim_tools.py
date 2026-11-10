@@ -6,6 +6,7 @@ import pytest
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.memory import Consolidator, MemoryStore
 from nanobot.agent.memory_documents import ClaimDraft
+from nanobot.agent.memory_dreams import DreamBatch
 from nanobot.agent.tools.context import RequestContext, ToolContext, request_context
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.memory_claims import (
@@ -198,15 +199,15 @@ async def test_recall_searches_bank_with_short_memory_and_no_injection_limit(tmp
     assert block is not None and "只喝手冲咖啡" in block.content
 
 
-def test_dream_gets_claim_tools_and_daily_write_access(tmp_path):
+def test_dream_gets_claim_tools_and_protects_managed_files(tmp_path):
     store = _store(tmp_path, daily_notes=True)
 
-    tools = store.build_dream_tools()
+    tools = store.build_dream_tools(DreamBatch("", 0, {}))
 
     assert _MEMORY_TOOLS <= set(tools.tool_names)
     write = tools.get("write_file")
     assert write is not None
-    assert store.daily.dir in write._extra_write_allowed_dirs
+    assert store.daily.dir not in write._extra_write_allowed_dirs
 
 
 def test_dream_prompt_uses_redacted_history_without_forgotten_content(tmp_path):
@@ -219,11 +220,11 @@ def test_dream_prompt_uses_redacted_history_without_forgotten_content(tmp_path):
     result = store.build_dream_prompt()
 
     assert result is not None
-    prompt = result[0]
+    prompt = result.prompt
     assert "## Structured memory" in prompt
     assert "memory/daily/YYYY-MM-DD.md" in prompt
     assert "养了一只猫" not in prompt
-    assert "[已遗忘]" in prompt
+    assert "[h:2:1]" in prompt
     assert "只喝手冲咖啡" in prompt
 
 
@@ -234,9 +235,10 @@ def test_dream_prompt_unchanged_when_structured_memory_is_off(tmp_path):
     result = store.build_dream_prompt()
 
     assert result is not None
-    assert result[0] == (
+    assert result.prompt == (
         f"{MemoryStore.default_dream_prompt()}\n\n## Conversation History\n"
-        f"[{store.read_unprocessed_history(0)[0]['timestamp']}] - [permanent] 只喝手冲咖啡"
+        f"[h:1] [{store.read_unprocessed_history(0)[0]['timestamp']}] (conversation summary)\n"
+        "[h:1:1] - [permanent] 只喝手冲咖啡"
     )
 
 

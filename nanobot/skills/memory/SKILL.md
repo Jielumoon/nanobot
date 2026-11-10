@@ -22,6 +22,12 @@ When the memory tools are available:
 - Look up or explain: `memory_search` searches core, bank, projects, people, and daily. `include_history=true` also returns expired/superseded entries. Use `memory_explain(claim_id=... or query=...)` for evidence, file location, entity links, ledger history, and the bounded bidirectional correction chain.
 - Explicitly forget: call `memory_forget` with claim IDs or a query. Use `person` or `project` to list all entity-linked candidates, including claims in other pages and archives. Show ambiguous candidates and confirm the scope before retrying with IDs or `all_matches=true`. Entity confirmation also deletes the page and permanently tombstones its ID.
 
-Report only what the tool confirms. Permanent tombstones prevent restored files from resurrecting forgotten entries. Forgetting cleans identifiable copies and matching history lines, but does not delete original chat sessions or Git history. Forgotten evidence is never returned by `memory_explain`.
+Report only what the tool confirms. Permanent tombstones prevent restored files from resurrecting forgotten entries. Forgetting cleans identifiable copies, matching history lines, and Dream notes, but does not delete original chat sessions or Git history. Forgotten evidence is never returned by `memory_explain`. `/dream-restore` restores the selected managed snapshot while retaining the ledger, reconciles tombstones, and commits only the cleaned state.
 
 Stable core stays in the system prompt. Current commitments, the most recent active projects, unambiguously mentioned people, and query matches share one bounded, deduplicated runtime context. A missing automatic recall is not proof that no memory exists; use `memory_search` when needed.
+
+## Dream
+
+Manual and scheduled Dream use the same workspace coordinator. Start with `memory_reflect(section="反思" or "待确认", lines=[...])`; uncertain inferences belong in `待确认`, not in claims. Every Dream `memory_remember` needs a `source` handle from the current batch, for example `h:123:2` for a summary line. Do not invent handles, quotations, or run metadata. Skip rejected forgotten/changed sources. Person claims need actual supporting `quote` text in that source. Route project progress/decisions/commitments with `project`, and update status with `memory_project`.
+
+`dreams/YYYY-MM-DD.md` is private reflection, excluded from normal search and context. Prior pending notes are budgeted hints for the next Dream, not evidence. The runtime writes `变更审计` from this run's ledger events and records the content commit SHA; it manages the cursor and Git commits. Never edit the audit or ledger with file tools.

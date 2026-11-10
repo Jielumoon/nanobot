@@ -27,6 +27,7 @@ CLAIM_KINDS: tuple[ClaimKind, ...] = get_args(ClaimKind)
 Clock = Callable[[], datetime]
 MARKER_RE = re.compile(r"[ \t]*<!--\s*claim:(c_[0-9a-f]{12})(?:\s+(\{.*?\}))?\s*-->")
 CLAIM_REF_RE = re.compile(r"<!--\s*claim:(c_[0-9a-f]{12})(?=\s|-->|$)")
+AUDIT_REF_RE = re.compile(r"<!-- audit-claim:(c_[0-9a-f]{12}) -->")
 CLAIM_COMMENT_RE = re.compile(r"[ \t]*<!--\s*claim:.*?(?:-->|$)", re.MULTILINE)
 ENTITY_RE = re.compile(r"<!--\s*entity:(\S+)\s+(\{.*?\})\s*-->")
 ENTITY_COMMENT_RE = re.compile(r"[ \t]*<!--\s*entity:.*?(?:-->|$)", re.MULTILINE)
@@ -72,12 +73,12 @@ def digest(text: str) -> str:
 
 
 def strip_claim_markers(text: str) -> str:
-    return ENTITY_COMMENT_RE.sub("", CLAIM_COMMENT_RE.sub("", text))
+    return ENTITY_COMMENT_RE.sub("", CLAIM_COMMENT_RE.sub("", AUDIT_REF_RE.sub("", text)))
 
 
 def marked_claim_ids(line: str) -> set[str]:
     """Keep IDs addressable even when a hand-edited comment has invalid metadata."""
-    return set(CLAIM_REF_RE.findall(line))
+    return set(CLAIM_REF_RE.findall(line)) | set(AUDIT_REF_RE.findall(line))
 
 
 def line_text(line: str) -> str:
@@ -99,6 +100,8 @@ class Evidence(BaseModel):
     source_ref: str | None = None
     session_key: str | None = None
     message_id: str | None = None
+    source_timestamp: str | None = None
+    source_kind: Literal["message", "summary"] | None = None
 
 
 class ClaimMetadata(BaseModel):
@@ -380,9 +383,12 @@ class MemoryDocuments:
             paths.extend(sorted((self.workspace / "memory" / folder).glob("*.md")))
         return [path for path in paths if path.is_file()]
 
-    def snapshot(self) -> dict[str, str]:
+    def snapshot(self, *, include_dreams: bool = False) -> dict[str, str]:
+        paths = self.files()
+        if include_dreams:
+            paths.extend(sorted((self.workspace / "dreams").glob("*.md")))
         return {
-            path.relative_to(self.workspace).as_posix(): read_text(path) for path in self.files()
+            path.relative_to(self.workspace).as_posix(): read_text(path) for path in paths
         }
 
     def events(self) -> list[LedgerEvent]:

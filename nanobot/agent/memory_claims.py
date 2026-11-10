@@ -78,7 +78,10 @@ def document_lines(snapshot: dict[str, str]) -> Iterable[tuple[LineMatch, Claim 
                 heading = text
                 continue
             if text:
-                claim = decode_claim(raw, path, number, heading, issues=issues)
+                claim = (
+                    None if path.startswith("dreams/")
+                    else decode_claim(raw, path, number, heading, issues=issues)
+                )
                 yield LineMatch(path, number, raw), claim
 
 
@@ -176,6 +179,8 @@ class ClaimStore:
         self, draft: ClaimDraft, *, session_key: str | None = None,
         message_id: str | None = None, actor: str = "user", run_id: str | None = None,
         source_ref: str | None = None,
+        source_timestamp: str | None = None,
+        source_kind: Literal["message", "summary"] | None = None,
     ) -> RememberResult:
         with self.lock:
             self.index.sync()
@@ -233,6 +238,7 @@ class ClaimStore:
                 evidence=Evidence.model_construct(
                     quote=draft.quote, source_ref=source_ref,
                     session_key=session_key, message_id=message_id,
+                    source_timestamp=source_timestamp, source_kind=source_kind,
                 ),
                 **draft.model_dump(exclude={"quote", "core", "person", "project", "aliases"}),
             )
@@ -282,7 +288,7 @@ class ClaimStore:
         with self.lock:
             self.index.sync()
             # Raw marker IDs keep malformed comments and every duplicate addressable.
-            snapshot = self.documents.snapshot()
+            snapshot = self.documents.snapshot(include_dreams=True)
             lines = [
                 (line, claim, marked_claim_ids(line.text))
                 for line, claim in document_lines(snapshot)
@@ -435,7 +441,7 @@ class ClaimStore:
             return self._reconcile(claims, at=iso(self.clock()))
 
     def _reconcile(self, claims: dict[str, Claim], *, at: str) -> list[str]:
-        snapshot = self.documents.snapshot()
+        snapshot = self.documents.snapshot(include_dreams=True)
         tombstones = self.documents.tombstones()
         deleted_pages: list[str] = []
         for path, content in snapshot.items():
@@ -495,10 +501,12 @@ class ClaimStore:
         self.documents.apply(changes)
         for path in deleted_pages:
             (self.workspace / path).unlink()
-        self.index.sync([*changes, *deleted_pages])
+        self.index.sync(path for path in [*changes, *deleted_pages] if not path.startswith("dreams/"))
         return [*changes, *deleted_pages]
 
-    def expire_due(self, *, now: datetime | None = None) -> list[Claim]:
+    def expire_due(
+        self, *, now: datetime | None = None, actor: str = "system", run_id: str | None = None,
+    ) -> list[Claim]:
         moment = iso(now if now is not None else self.clock())
         with self.lock:
             self.index.sync()
@@ -518,7 +526,7 @@ class ClaimStore:
                 self.documents.append_events(
                     LedgerEvent(
                         target_type="claim", target_id=claim.claim_id,
-                        action="expire", actor="system", at=moment,
+                        action="expire", actor=actor, at=moment, run_id=run_id,
                     ) for claim in expired
                 )
                 self.index.sync([])
@@ -526,6 +534,7 @@ class ClaimStore:
 
     def update_project(
         self, project: str, status: EntityStatus, *, rename: str | None = None,
+        actor: str = "user", run_id: str | None = None,
     ) -> Entity:
         with self.lock:
             self.index.sync()
@@ -551,7 +560,7 @@ class ClaimStore:
                 (self.workspace / path).unlink()
             self.documents.append_events([LedgerEvent(
                 target_type="entity", target_id=entity.entity_id, action="update",
-                actor="user", at=now,
+                actor=actor, at=now, run_id=run_id,
             )])
             self.index.sync([path, new_path])
             return updated

@@ -73,6 +73,7 @@ class GitStore:
         Returns True if a new repo was created, False if already exists.
         """
         if self.is_initialized():
+            self._update_gitignore()
             return False
 
         if self._is_inside_git_repo():
@@ -88,27 +89,13 @@ class GitStore:
 
             porcelain.init(str(self._workspace))
 
-            gitignore = self._workspace / ".gitignore"
-            dream_entries = self._build_gitignore()
-            if gitignore.exists():
-                existing = gitignore.read_text(encoding="utf-8")
-                existing_lines = set(existing.splitlines())
-                new_lines = [
-                    line
-                    for line in dream_entries.splitlines()
-                    if line not in existing_lines
-                ]
-                if new_lines:
-                    merged = existing.rstrip("\n") + "\n" + "\n".join(new_lines) + "\n"
-                    gitignore.write_text(merged, encoding="utf-8")
-            else:
-                gitignore.write_text(dream_entries, encoding="utf-8")
+            self._update_gitignore()
 
             for rel in self._tracked_files:
                 p = self._workspace / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
                 if not p.exists():
-                    p.write_text("", encoding="utf-8")
+                    atomic_write_text(p, "")
 
             porcelain.add(
                 str(self._workspace),
@@ -141,7 +128,10 @@ class GitStore:
             # check can miss rapid same-size rewrites when the filesystem also
             # preserves the file's mtime.
             # Paths present only in HEAD stage the deletion of a tracked-dir file.
-            porcelain.add(str(self._workspace), paths=self._staging_paths(*self.tracked_paths()))
+            porcelain.add(
+                str(self._workspace),
+                paths=self._staging_paths(".gitignore", *self.tracked_paths()),
+            )
             st = porcelain.status(str(self._workspace))
             staged = cast(dict[object, list[object]], st.staged)
             if not any(staged.values()):
@@ -263,6 +253,17 @@ class GitStore:
             current = current.parent
         return False
 
+    def _update_gitignore(self) -> None:
+        path = self._workspace / ".gitignore"
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        existing_lines = set(existing.splitlines())
+        additions = [
+            line for line in self._build_gitignore().splitlines() if line not in existing_lines
+        ]
+        if additions:
+            prefix = existing.rstrip("\n") + "\n" if existing else ""
+            atomic_write_text(path, prefix + "\n".join(additions) + "\n")
+
     def _build_gitignore(self) -> str:
         dirs: set[str] = set()
         for f in self._tracked_files:
@@ -278,7 +279,7 @@ class GitStore:
             lines.append(f"!{d}/")
         for f in self._tracked_files:
             lines.append(f"!{f}")
-        lines.append("!.gitignore")
+        lines.extend(["!.gitignore", "*.sqlite", "*.sqlite3", "*-wal", "*-shm"])
         return "\n".join(lines) + "\n"
 
 
@@ -496,18 +497,19 @@ class GitStore:
 
 
     def revert(self, commit: str, *, message_prefix: str | None = None) -> str | None:
-        """Revert (undo) the changes introduced by the given commit.
+        """Restore the selected parent snapshot and commit it."""
+        if not self.restore_snapshot(commit, message_prefix=message_prefix):
+            return None
+        return self.auto_commit(f"revert: undo {commit}")
 
-        Restores all tracked memory files to the state at the commit's parent,
-        then creates a new commit recording the revert. When *message_prefix*
-        is provided, commits outside that history are rejected before any files
-        are changed.
+    def restore_snapshot(self, commit: str, *, message_prefix: str | None = None) -> bool:
+        """Restore the complete managed set to the selected commit's parent, without committing.
 
-        Returns the new commit SHA, or ``None`` when the commit cannot be reverted.
-        Repository and filesystem failures raise :class:`GitStoreError`.
+        The caller reconciles permanent tombstones before publishing the restored state.
+        Files absent from that snapshot are removed, including files added by later commits.
         """
         if not self.is_initialized():
-            return None
+            return False
 
         try:
             from dulwich.repo import Repo
@@ -515,12 +517,12 @@ class GitStore:
             full_sha = self._resolve_sha(commit)
             if not full_sha:
                 logger.warning("Git revert: SHA not found: {}", commit)
-                return None
+                return False
 
             with Repo(str(self._workspace)) as repo:
                 commit_obj = repo[full_sha]
                 if commit_obj.type_name != b"commit":
-                    return None
+                    return False
                 typed_commit = cast("Commit", commit_obj)
 
                 commit_message = typed_commit.message.decode(
@@ -533,42 +535,27 @@ class GitStore:
                         commit,
                         message_prefix,
                     )
-                    return None
+                    return False
 
                 if not typed_commit.parents:
                     logger.warning("Git revert: cannot revert root commit {}", commit)
-                    return None
+                    return False
 
                 parent_obj = cast("Commit", repo[typed_commit.parents[0]])
                 tree = cast("Tree", repo[parent_obj.tree])
-                commit_tree = cast("Tree", repo[typed_commit.tree])
-
-                restored: list[str] = []
-                restore_paths = [path for path in self._tracked_files if path not in self._restore_excluded]
+                current_paths = set(self.tracked_paths())
+                restore_paths = set(self._tracked_files)
                 for directory in self._tracked_dirs:
-                    parent_files = self._tree_dir_files(repo, tree, directory)
-                    restore_paths.extend(path for path in parent_files if path not in self._restore_excluded)
-                    # Files first introduced by the reverted commit are removed;
-                    # files created by later commits are left untouched.
-                    for added in self._tree_dir_files(repo, commit_tree, directory):
-                        if added not in parent_files and added not in self._restore_excluded:
-                            target = self._workspace / added
-                            if target.exists():
-                                target.unlink()
-                                restored.append(added)
-                for filepath in restore_paths:
+                    restore_paths.update(self._tree_dir_files(repo, tree, directory))
+                selected = (current_paths | restore_paths) - self._restore_excluded
+                for filepath in sorted(selected):
                     content = self._read_blob_from_tree(repo, tree, filepath)
+                    dest = self._workspace / filepath
                     if content is not None:
-                        dest = self._workspace / filepath
-                        dest.parent.mkdir(parents=True, exist_ok=True)
                         atomic_write_text(dest, content)
-                        restored.append(filepath)
-
-            if not restored:
-                return None
-
-            msg = f"revert: undo {commit}"
-            return self.auto_commit(msg)
+                    elif dest.exists():
+                        dest.unlink()
+            return True
         except Exception as exc:
             raise GitStoreError(f"Git revert failed for {commit}") from exc
 
