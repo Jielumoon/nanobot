@@ -45,9 +45,17 @@ class CommitInfo:
 class GitStore:
     """Git-backed version control for memory files."""
 
-    def __init__(self, workspace: Path, tracked_files: list[str]):
+    def __init__(
+        self,
+        workspace: Path,
+        tracked_files: list[str],
+        tracked_dirs: list[str] | None = None,
+    ):
         self._workspace = workspace
         self._tracked_files = tracked_files
+        # Directories whose ``*.md`` files are tracked as they appear, such as
+        # dated memory notes.
+        self._tracked_dirs = list(tracked_dirs or [])
 
     def is_initialized(self) -> bool:
         """Check if the git repo has been initialized."""
@@ -100,7 +108,7 @@ class GitStore:
 
             porcelain.add(
                 str(self._workspace),
-                paths=self._staging_paths(".gitignore", *self._tracked_files),
+                paths=self._staging_paths(".gitignore", *self.tracked_paths()),
             )
             porcelain.commit(
                 str(self._workspace),
@@ -128,7 +136,8 @@ class GitStore:
             # Stage first so Dulwich refreshes the content hashes.  A status
             # check can miss rapid same-size rewrites when the filesystem also
             # preserves the file's mtime.
-            porcelain.add(str(self._workspace), paths=self._staging_paths(*self._tracked_files))
+            # Paths present only in HEAD stage the deletion of a tracked-dir file.
+            porcelain.add(str(self._workspace), paths=self._staging_paths(*self.tracked_paths()))
             st = porcelain.status(str(self._workspace))
             staged = cast(dict[object, list[object]], st.staged)
             if not any(staged.values()):
@@ -157,6 +166,57 @@ class GitStore:
         except Exception as exc:
             raise GitStoreError(f"Git auto-commit failed: {message}") from exc
 
+
+    def _working_dir_files(self, directory: str) -> list[str]:
+        root = self._workspace / directory
+        if not root.is_dir():
+            return []
+        return sorted(
+            path.relative_to(self._workspace).as_posix()
+            for path in root.glob("*.md")
+            if path.is_file()
+        )
+
+    def _tree_dir_files(self, repo: "Repo", tree: "Tree | None", directory: str) -> list[str]:
+        current = tree
+        for part in Path(directory).parts:
+            if current is None:
+                return []
+            try:
+                entry = current[part.encode()]
+            except KeyError:
+                return []
+            obj = repo[entry[1]]
+            current = cast("Tree", obj) if obj.type_name == b"tree" else None
+        if current is None:
+            return []
+        names: list[str] = []
+        for item in current.items():
+            name = item.path.decode("utf-8", errors="replace")
+            if name.endswith(".md") and repo[item.sha].type_name == b"blob":
+                names.append(f"{Path(directory).as_posix()}/{name}")
+        return sorted(names)
+
+    def tracked_paths(self) -> list[str]:
+        """Tracked files plus every ``*.md`` file in tracked directories (working tree or HEAD)."""
+        paths = list(self._tracked_files)
+        if not self._tracked_dirs:
+            return paths
+        head_files: list[str] = []
+        if self.is_initialized():
+            from dulwich.repo import Repo
+
+            with Repo(str(self._workspace)) as repo:
+                head_tree = self._head_tree(repo)
+                for directory in self._tracked_dirs:
+                    head_files.extend(self._tree_dir_files(repo, head_tree, directory))
+        for directory in self._tracked_dirs:
+            for path in sorted({*self._working_dir_files(directory), *(
+                f for f in head_files if f.startswith(f"{Path(directory).as_posix()}/")
+            )}):
+                if path not in paths:
+                    paths.append(path)
+        return paths
 
     def _staging_paths(self, *paths: str) -> list[str]:
         return [str((self._workspace / path).absolute()) for path in paths]
@@ -205,6 +265,10 @@ class GitStore:
             parent = str(Path(f).parent)
             if parent != ".":
                 dirs.add(parent)
+        for d in self._tracked_dirs:
+            parts = Path(d).parts
+            for depth in range(1, len(parts) + 1):
+                dirs.add(Path(*parts[:depth]).as_posix())
         lines = ["/*"]
         for d in sorted(dirs):
             lines.append(f"!{d}/")
@@ -473,12 +537,26 @@ class GitStore:
 
                 parent_obj = cast("Commit", repo[typed_commit.parents[0]])
                 tree = cast("Tree", repo[parent_obj.tree])
+                commit_tree = cast("Tree", repo[typed_commit.tree])
 
                 restored: list[str] = []
-                for filepath in self._tracked_files:
+                restore_paths = list(self._tracked_files)
+                for directory in self._tracked_dirs:
+                    parent_files = self._tree_dir_files(repo, tree, directory)
+                    restore_paths.extend(parent_files)
+                    # Files first introduced by the reverted commit are removed;
+                    # files created by later commits are left untouched.
+                    for added in self._tree_dir_files(repo, commit_tree, directory):
+                        if added not in parent_files:
+                            target = self._workspace / added
+                            if target.exists():
+                                target.unlink()
+                                restored.append(added)
+                for filepath in restore_paths:
                     content = self._read_blob_from_tree(repo, tree, filepath)
                     if content is not None:
                         dest = self._workspace / filepath
+                        dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_text(content, encoding="utf-8")
                         restored.append(filepath)
 

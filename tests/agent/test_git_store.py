@@ -291,3 +291,36 @@ class TestMemoryStoreGitProperty:
         from nanobot.agent.memory import MemoryStore
         store = MemoryStore(tmp_path)
         assert store.git is store._git
+
+
+class TestTrackedDirs:
+    @pytest.fixture
+    def daily_git(self, tmp_path):
+        store = GitStore(tmp_path, tracked_files=TRACKED, tracked_dirs=["memory/daily"])
+        store.init()
+        return store
+
+    def test_new_files_in_tracked_dir_are_committed(self, daily_git, tmp_path):
+        note = tmp_path / "memory" / "daily" / "2026-11-11.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text("# 2026-11-11\n- progress\n", encoding="utf-8")
+
+        assert daily_git.auto_commit("dream: daily") is not None
+        assert "memory/daily/2026-11-11.md" in daily_git.tracked_paths()
+        assert daily_git.auto_commit("dream: unchanged") is None
+
+    def test_revert_removes_files_added_by_reverted_commit(self, daily_git, tmp_path):
+        daily_dir = tmp_path / "memory" / "daily"
+        daily_dir.mkdir(parents=True, exist_ok=True)
+        (daily_dir / "2026-11-10.md").write_text("old\n", encoding="utf-8")
+        daily_git.auto_commit("dream: first")
+        (daily_dir / "2026-11-10.md").write_text("old\nedited\n", encoding="utf-8")
+        (daily_dir / "2026-11-11.md").write_text("new\n", encoding="utf-8")
+        sha = daily_git.auto_commit("dream: second")
+        assert sha is not None
+
+        assert daily_git.revert(sha) is not None
+
+        assert (daily_dir / "2026-11-10.md").read_text(encoding="utf-8") == "old\n"
+        assert not (daily_dir / "2026-11-11.md").exists()
+        assert daily_git.auto_commit("dream: after revert") is None
