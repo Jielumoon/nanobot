@@ -2590,7 +2590,7 @@ The deprecated `agents.defaults.failOnToolError` field is silently ignored when 
 
 </details>
 
-Dream 另由 `agents.defaults.dream` 控制：默认每 2 小时整理，`cron` 可覆盖间隔，`modelOverride` 接受 `modelPresets` 名称。关闭定时任务后仍可手动 `/dream`。向量只在 Dream 收尾限量补算；开启语义检索前需配置支持 embeddings 的 provider，会发送记忆正文和查询并可能产生 API 费用。服务故障退回关键词检索，缺 provider/key 等配置错误会明确报错。
+Dream 另由 `agents.defaults.dream` 控制：默认每 2 小时整理，`cron` 可覆盖间隔，`modelOverride` 接受 `modelPresets` 名称。关闭定时任务后仍可手动 `/dream`。向量只在 Dream 收尾限量补算；开启语义检索前需配置支持 embeddings 的 provider，会发送记忆正文和查询并可能产生 API 费用。服务故障退回关键词检索，缺 provider/key、无效 endpoint 或代理等配置错误会明确报错。WebUI 保存相关开关时先做纯配置校验，失败则拒绝整份 patch，不调用网络。endpoint、模型、维度或路由参数变化会切换向量缓存指纹，后续 Dream 再逐批补算。daily 摘要只属于历史检索；自动注入仍只使用当前有效条目，人物在所有分支都须被本轮提及。
 
 ## Auto Compact
 

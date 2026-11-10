@@ -122,6 +122,10 @@ class AgentRunSpec:
     continuation_callback: ContinuationCallback | None = None
     finalize_on_max_iterations: bool = True
     provider_state: ProviderConversationState | None = None
+    context_generation: str | None = None
+    refresh_context: Callable[
+        [list[dict[str, Any]], list[dict[str, Any]], str | None], str | None,
+    ] | None = None
     llm_usage_source: LLMUsageSource | None = None
     events: EventSink = NO_EVENTS
 
@@ -399,6 +403,7 @@ class AgentRunner:
             state=spec.provider_state,
             session_id=spec.session_key,
             checkpoint_callback=checkpoint_compaction,
+            context_generation=spec.context_generation,
         )
         governance_config = ContextGovernanceConfig(
             provider=spec.runtime.provider,
@@ -454,6 +459,14 @@ class AgentRunner:
             if drained_before_request:
                 had_injections = True
             await end_length_segment(interrupted=drained_before_request)
+            if spec.refresh_context is not None:
+                generation = await self.prepare_prompt(
+                    spec.refresh_context, messages, compaction.accepted_messages,
+                    compaction.active_summary,
+                )
+                if generation is not None:
+                    conversation_state.replace_transcript(messages)
+                    conversation_state.context_generation = generation
             context = AgentHookContext(
                 iteration=iteration,
                 messages=messages,

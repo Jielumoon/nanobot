@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import ValidationError
 
@@ -47,8 +47,7 @@ class _MemoryClaimTool(Tool):
     """Shared construction for tools that need the agent's claim ledger."""
 
     def __init__(self, store: MemoryStore, *, dream: DreamBatch | None = None) -> None:
-        if store.claims is None:
-            raise RuntimeError(f"{type(self).__name__} requires memory claims to be enabled")
+        assert store.claims is not None
         self._store = store
         self._claims = store.claims
         self._dream = dream
@@ -59,9 +58,8 @@ class _MemoryClaimTool(Tool):
 
     @classmethod
     def create(cls, ctx: ToolContext) -> Tool:
-        if ctx.memory is None:
-            raise RuntimeError(f"{cls.__name__} requires the agent memory store")
-        return cls(ctx.memory)
+        # Tool loading calls enabled() before create(); direct Dream assembly uses __init__.
+        return cls(cast("MemoryStore", ctx.memory))
 
 
 @tool_parameters(
@@ -349,7 +347,7 @@ class MemoryForgetTool(_MemoryClaimTool):
             "status": "forgotten", "entities": result.entities,
             "retracted": [claim.claim_id for claim in result.retracted],
             "removed": [
-                {"source": f"{item.path}:{item.line}", "text": item.text}
+                {"source": f"{item.path}:{item.line}"}
                 for item in result.removed_lines
             ],
             "history_entries_redacted": redacted,

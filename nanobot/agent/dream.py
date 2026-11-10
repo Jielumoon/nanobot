@@ -10,11 +10,14 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from nanobot.agent.memory import MemoryStore
+from nanobot.agent.memory_coordination import (
+    acquire_memory_operation,
+    memory_operation_running,
+    release_memory_operation,
+)
 
 if TYPE_CHECKING:
     from nanobot.agent.loop import AgentLoop
-
-_RUNNING: set[Path] = set()
 
 
 @dataclass(frozen=True)
@@ -28,7 +31,7 @@ class DreamResult:
 
 
 def dream_running(workspace: Path) -> bool:
-    return workspace.resolve() in _RUNNING
+    return memory_operation_running(workspace)
 
 
 async def run_dream(
@@ -37,10 +40,8 @@ async def run_dream(
 ) -> DreamResult:
     store = agent.context.memory
     workspace = store.workspace.resolve()
-    # No await between admission and reservation: both entrypoints use the gateway loop.
-    if workspace in _RUNNING:
+    if not acquire_memory_operation(workspace):
         return DreamResult("busy")
-    _RUNNING.add(workspace)
     run_id = uuid4().hex
     started = time.monotonic()
     status = "failed"
@@ -81,4 +82,4 @@ async def run_dream(
             )
         return DreamResult(status, time.monotonic() - started, cursor, changed, sha, reason)
     finally:
-        _RUNNING.remove(workspace)
+        release_memory_operation(workspace)

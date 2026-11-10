@@ -24,6 +24,11 @@ from nanobot.agent.memory_claims import (
     ForgetResult,
     RememberResult,
 )
+from nanobot.agent.memory_coordination import (
+    MemoryOperationBusyError,
+    acquire_memory_operation,
+    release_memory_operation,
+)
 from nanobot.agent.memory_documents import (
     ClaimDraft,
     Clock,
@@ -36,6 +41,7 @@ from nanobot.agent.memory_documents import (
 )
 from nanobot.agent.memory_dreams import DreamBatch, DreamNotes, DreamSource
 from nanobot.agent.memory_index import QueryEmbedding
+from nanobot.agent.memory_view import PromptMemory
 from nanobot.config.network import NetworkConfig
 from nanobot.config.schema import MemoryConfig, ProvidersConfig
 from nanobot.events import NO_EVENTS, CompactionReason, ContextCompactionEvent, EventSink
@@ -115,14 +121,20 @@ class MemoryStore:
         self._dream_prompt_oversize_logged = False
         self._append_lock = threading.RLock()
         self.dreams = DreamNotes(
-            MemoryDocuments(workspace), lock=self._append_lock, clock=clock, timezone=self.timezone,
+            MemoryDocuments(workspace), lock=self._append_lock,
+            clock=lambda: self.clock(), timezone=self.timezone,
         )
         self.daily: DailyNotes | None = (
-            DailyNotes(self.memory_dir, timezone=self.timezone, clock=clock, lock=self._append_lock)
+            DailyNotes(
+                self.memory_dir, timezone=self.timezone,
+                clock=lambda: self.clock(), lock=self._append_lock,
+            )
             if self.config.daily_notes else None
         )
         self.claims: ClaimStore | None = (
-            ClaimStore(workspace, timezone=self.timezone, clock=clock, lock=self._append_lock)
+            ClaimStore(
+                workspace, timezone=self.timezone, clock=lambda: self.clock(), lock=self._append_lock,
+            )
             if self.config.claims_enabled else None
         )
         self.embeddings: MemoryEmbeddings | None = None
@@ -145,6 +157,9 @@ class MemoryStore:
     @property
     def git(self) -> GitStore:
         return self._git
+
+    def generation(self) -> str:
+        return self.dreams.documents.generation()
 
 
     @staticmethod
@@ -334,6 +349,9 @@ class MemoryStore:
             self.claims.project_text(memory, path="memory/MEMORY.md", stable_core=True)
             if self.claims is not None else strip_claim_markers(memory)
         )
+        return self.render_prompt_memory(clean)
+
+    def render_prompt_memory(self, clean: str) -> str:
         head = self.memory_head(clean)
         visible = clean if head is None else head[0]
         parts = [visible] if visible.strip() else []
@@ -344,30 +362,25 @@ class MemoryStore:
             )
         return "\n\n".join(parts)
 
-    def recall_exclusions(self) -> list[tuple[str, int]]:
-        """Original positions fully visible in the stable core prompt."""
-        if self.claims is None:
-            return []
-        excluded: list[tuple[str, int]] = []
-        for path, text in (("USER.md", self.read_user()), ("memory/MEMORY.md", self.read_memory())):
-            lines = self.claims.project_lines(text, path=path, stable_core=True)
-            clean = "\n".join(line for _, line in lines)
-            head = self.memory_head(clean) if path == "memory/MEMORY.md" else None
-            visible = clean if head is None else head[0]
-            used = 0
-            for number, line in lines:
-                used += len(line)
-                if used > len(visible):
-                    break
-                excluded.append((path, number))
-                used += 1
-        return excluded
+    def prompt_view(
+        self, query: str | None = None, *, semantic: QueryEmbedding | None = None,
+    ) -> PromptMemory:
+        from nanobot.agent.memory_recall import MemoryRuntimeContext
 
-    def append_daily_summary(self, summary: str, *, session_key: str | None = None) -> None:
+        if self.claims is None:
+            return PromptMemory(
+                strip_claim_markers(self.read_user()), self.prompt_memory(self.read_memory()),
+                generation=self.generation(),
+            )
+        return MemoryRuntimeContext(self, self.claims).view(query, semantic=semantic)
+
+    def append_daily_summary(
+        self, summary: str, *, session_key: str | None = None, cursor: int | None = None,
+    ) -> None:
         """Mirror a compaction checkpoint into today's daily note when enabled."""
         if self.daily is None:
             return
-        self.daily.append_summary(summary, session_key=session_key)
+        self.daily.append_summary(summary, session_key=session_key, cursor=cursor)
 
     def forget_memory(
         self,
@@ -667,13 +680,14 @@ class MemoryStore:
         return has_workspace_prompt_override(self.dream_prompt_file)
 
     @staticmethod
-    def default_dream_prompt() -> str:
+    def default_dream_prompt(*, claims_enabled: bool = True) -> str:
         from nanobot.agent.skill_metadata import BUILTIN_SKILLS_DIR
 
         return render_template(
             "agent/dream.md",
             strip=True,
             skill_creator_path=str(BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"),
+            claims_enabled=claims_enabled,
         )
 
     def _dream_template(self) -> str:
@@ -690,7 +704,7 @@ class MemoryStore:
                     WORKSPACE_PROMPT_MAX_CHARS, original_chars,
                 )
             return text
-        return self.default_dream_prompt()
+        return self.default_dream_prompt(claims_enabled=self.claims is not None)
 
     def build_dream_prompt(
         self, *, max_entries: int = 20, run_id: str | None = None,
@@ -702,8 +716,12 @@ class MemoryStore:
                 return None
             sources: dict[str, DreamSource] = {}
             history: list[str] = []
+            tombstones = self.dreams.documents.tombstones()
             for entry in entries:
                 cursor = entry["cursor"]
+                if ("history", str(cursor)) in tombstones:
+                    history.append(f"[history:{cursor}] Source revoked; unavailable as evidence.")
+                    continue
                 lines = tuple(
                     line for line in entry["content"].splitlines()
                     if line.strip() and "[已遗忘]" not in line
@@ -743,7 +761,7 @@ class MemoryStore:
             entry for entry, cursor in self._iter_valid_entries() if cursor == source.cursor
         ), None)
         tombstones = self.dreams.documents.tombstones()
-        if current is None or any(
+        if current is None or ("history", str(source.cursor)) in tombstones or any(
             "[已遗忘]" in line
             or ("history", f"{source.cursor}:{digest(line)}") in tombstones
             or line not in current["content"].splitlines()
@@ -766,6 +784,7 @@ class MemoryStore:
                 draft, actor="dream", run_id=run_id,
                 source_ref=f"history:{source.cursor}", session_key=source.session_key,
                 source_timestamp=source.timestamp, source_kind="summary",
+                history_lines=tuple(f"{source.cursor}:{digest(line)}" for line in source.lines),
             )
 
     def reflect(
@@ -839,11 +858,16 @@ class MemoryStore:
             return bool(diff), sha
 
     def restore_memory(self, sha: str, *, message_prefix: str = "dream:") -> str | None:
-        with self._append_lock:
-            if not self.git.restore_snapshot(sha, message_prefix=message_prefix):
-                return None
-            self.reconcile_files()
-            return self.git.auto_commit(f"revert: undo {sha}")
+        if not acquire_memory_operation(self.workspace):
+            raise MemoryOperationBusyError("记忆正在整理或恢复，请完成后再试")
+        try:
+            with self._append_lock:
+                if not self.git.restore_snapshot(sha, message_prefix=message_prefix):
+                    return None
+                self.reconcile_files()
+                return self.git.auto_commit(f"revert: undo {sha}")
+        finally:
+            release_memory_operation(self.workspace)
 
     def dream_content_diff(self) -> str:
         """Structured summary of uncommitted changes to the durable memory files.
@@ -1300,8 +1324,8 @@ class MemoryArchiver:
             )
             return raw_fallback()
         if persist and summary != "(nothing)":
-            self.store.append_history(summary, session_key=session_key)
-            self.store.append_daily_summary(summary, session_key=session_key)
+            cursor = self.store.append_history(summary, session_key=session_key)
+            self.store.append_daily_summary(summary, session_key=session_key, cursor=cursor)
         return summary
 
     async def archive_session(

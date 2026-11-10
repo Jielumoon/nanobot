@@ -261,6 +261,7 @@ def test_disabling_memory_consolidation_preserves_other_memory_settings():
 def test_memory_switch_roundtrip_changes_only_selected_setting(tmp_path, key, default):
     path = tmp_path / "config.json"
     config = Config()
+    config.providers.openai.api_key = "test-embedding-key"
     save_config(config, path)
     expected = runtime_config_payload(config)
     assert expected[key] is default
@@ -271,6 +272,44 @@ def test_memory_switch_roundtrip_changes_only_selected_setting(tmp_path, key, de
         assert payload["runtime_config"] == expected
         assert payload["requires_restart"]
         assert runtime_config_payload(load_config(path)) == expected
+
+
+@pytest.mark.parametrize("provider, connection, message", [
+    ("openai", {}, "apiKey"),
+    ("private", {"apiKey": "test-key"}, "apiBase"),
+    ("private", {"apiKey": "test-key", "apiBase": "not-an-endpoint"}, "apiBase"),
+    ("openai", {"apiKey": "test-key", "useProxy": True}, "proxy"),
+])
+def test_memory_embedding_settings_reject_unusable_config_atomically(
+    tmp_path, provider, connection, message,
+):
+    path = tmp_path / "config.json"
+    config = Config.model_validate({
+        "providers": {provider: connection},
+        "agents": {"defaults": {"memory": {"embedding": {"provider": provider}}}},
+    })
+    save_config(config, path)
+    original = path.read_bytes()
+    with pytest.raises(WebUISettingsError, match=message):
+        update_runtime_config_settings({
+            "agents.defaults.memory.embedding.enabled": True,
+            "agents.defaults.max_tool_iterations": 99,
+        }, config_path=path)
+    assert path.read_bytes() == original
+
+
+def test_memory_embedding_setting_validates_only_selected_provider(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    monkeypatch.delenv("UNUSED_EMBEDDING_TEST_KEY", raising=False)
+    config = Config.model_validate({"providers": {
+        "openai": {"apiKey": "test-key"},
+        "anthropic": {"apiKey": "${UNUSED_EMBEDDING_TEST_KEY}"},
+    }})
+    save_config(config, path)
+    update_runtime_config_settings({
+        "agents.defaults.memory.embedding.enabled": True,
+    }, config_path=path)
+    assert load_config(path).agents.defaults.memory.embedding.enabled
 
 
 @pytest.mark.parametrize("key", [

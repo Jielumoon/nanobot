@@ -241,7 +241,7 @@ def test_dream_prompt_unchanged_when_structured_memory_is_off(tmp_path):
 
     assert result is not None
     assert result.prompt == (
-        f"{MemoryStore.default_dream_prompt()}\n\n## Conversation History\n"
+        f"{MemoryStore.default_dream_prompt(claims_enabled=False)}\n\n## Conversation History\n"
         f"[h:1] [{store.read_unprocessed_history(0)[0]['timestamp']}] (conversation summary)\n"
         "[h:1:1] - [permanent] 只喝手冲咖啡"
     )

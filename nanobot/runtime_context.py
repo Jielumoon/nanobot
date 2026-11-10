@@ -256,6 +256,24 @@ def replay_history_message(message: Mapping[str, Any]) -> dict[str, Any]:
     return projected
 
 
+def replay_model_memory(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply memory-only replay filtering to an in-flight model message."""
+    projected = dict(message)
+    meta = dict(projected.get("_meta") or {})
+    marker = meta.get(RUNTIME_CONTEXT_MESSAGE_META)
+    if marker is not None:
+        projected[RUNTIME_CONTEXT_HISTORY_META] = marker
+    projected = replay_history_message(projected)
+    if marker is not None:
+        retained = projected.pop(RUNTIME_CONTEXT_HISTORY_META, None)
+        if retained is None:
+            meta.pop(RUNTIME_CONTEXT_MESSAGE_META, None)
+        else:
+            meta[RUNTIME_CONTEXT_MESSAGE_META] = retained
+        projected["_meta"] = meta
+    return projected
+
+
 def public_history_message(message: Mapping[str, Any]) -> dict[str, Any]:
     """Return a user-visible copy with trusted runtime context removed exactly."""
     cleaned = deepcopy(dict(message))

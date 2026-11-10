@@ -25,6 +25,7 @@ from nanobot.agent.cron_turns import CronTurnCoordinator
 from nanobot.agent.execution_policy import ExecutionControlError, ExecutionPolicy, ExecutionScope
 from nanobot.agent.hook import AgentHook, AgentTurnHookFactory
 from nanobot.agent.memory import Consolidator
+from nanobot.agent.memory_context_state import MemoryContextRefresh
 from nanobot.agent.model_runtime import ModelRuntimeResolver
 from nanobot.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
 from nanobot.agent.subagent import SubagentManager
@@ -772,6 +773,7 @@ class AgentLoop:
             media=ctx.msg.media if ctx.kind is TurnKind.USER and ctx.msg.media else None,
             session_summary=ctx.pending_summary,
             runtime_context_blocks=ctx.runtime_context_blocks,
+            memory_view=ctx.request_context.memory_view if ctx.request_context is not None else None,
         )
 
     async def _request_context_for_turn(self, ctx: TurnContext) -> RequestContext:
@@ -831,6 +833,13 @@ class AgentLoop:
         request: RequestContext,
         tools: ToolRegistry,
     ) -> list[RuntimeContextBlock]:
+        if request.memory_view is None and self.context.memory.claims is not None:
+            query = request.original_user_text or ""
+            semantic = await self.context.memory.query_embedding(query[:2000])
+            view = await self.runner.prepare_prompt(
+                self.context.memory.prompt_view, query, semantic=semantic,
+            )
+            request = dataclasses.replace(request, memory_view=view)
         providers = [
             *tools.get_runtime_context_providers(),
             *self._runtime_context_providers,
@@ -1285,6 +1294,15 @@ class AgentLoop:
             ),
         )
         effective_tools = tools if tools is not None else self.tools
+        memory_generation = (
+            transcript_input.memory_view.generation if transcript_input.memory_view is not None
+            else self.context.memory.generation()
+        )
+        refresh_memory = MemoryContextRefresh(
+            self.context, memory_generation, channel=request_ctx.channel,
+            workspace=effective_scope.project_path,
+            include_memory=session.policy.persist if session is not None else True,
+        )
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
         request_token = bind_request_context(request_ctx)
         workspace_token = bind_workspace_scope(effective_scope)
@@ -1354,6 +1372,8 @@ class AgentLoop:
                     execution_scope.continuation_prompt if execution_scope is not None else None
                 ),
                 provider_state=provider_state,
+                context_generation=memory_generation,
+                refresh_context=refresh_memory,
                 llm_usage_source=source_from_request(
                     active_session_key,
                     channel=request_ctx.channel,
@@ -2237,10 +2257,22 @@ class AgentLoop:
         await ctx.delivery.runtime_admitted(runtime)
 
         ctx.request_context = await self._request_context_for_turn(ctx)
+        if self.context.memory.claims is not None:
+            query = ctx.msg.content if ctx.kind is TurnKind.USER else None
+            semantic = (
+                await self.context.memory.query_embedding(query[:2000]) if query is not None
+                else None
+            )
+            memory_view = await self.runner.prepare_prompt(
+                self.context.memory.prompt_view, query, semantic=semantic,
+            )
+            ctx.request_context = dataclasses.replace(ctx.request_context, memory_view=memory_view)
         if ctx.kind is TurnKind.USER:
             ctx.runtime_context_blocks = await self._resolve_runtime_context_for_turn(ctx)
         staged_provider_state = False
-        if stored_state is not None and runtime.provider.can_resume_conversation_state(
+        if stored_state is not None and (
+            (stored_state.context_generation or "") == self.context.memory.generation()
+        ) and runtime.provider.can_resume_conversation_state(
             stored_state,
             runtime.model,
         ):

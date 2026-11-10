@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Generator, Iterable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +13,8 @@ from typing import Literal
 from uuid import uuid4
 
 from nanobot.agent.memory_documents import (
+    HEADING_RE,
+    HISTORY_REF_RE,
     SECTIONS,
     Claim,
     ClaimDraft,
@@ -32,11 +36,11 @@ from nanobot.agent.memory_documents import (
     line_text,
     local_day,
     marked_claim_ids,
-    strip_claim_markers,
     utc_now,
 )
 from nanobot.agent.memory_entities import MemoryEntities
 from nanobot.agent.memory_index import MemoryIndex, QueryEmbedding, SearchHit
+from nanobot.agent.memory_view import MemoryReadView
 
 
 @dataclass(frozen=True)
@@ -74,9 +78,8 @@ def document_lines(snapshot: dict[str, str]) -> Iterable[tuple[LineMatch, Claim 
         issues: set[str] = set()
         for number, raw in enumerate(content.splitlines(), 1):
             text = line_text(raw)
-            if text.startswith("#"):
+            if HEADING_RE.match(raw):
                 heading = text
-                continue
             if text:
                 claim = (
                     None if path.startswith("dreams/")
@@ -181,6 +184,7 @@ class ClaimStore:
         source_ref: str | None = None,
         source_timestamp: str | None = None,
         source_kind: Literal["message", "summary"] | None = None,
+        history_lines: tuple[str, ...] = (),
     ) -> RememberResult:
         with self.lock:
             self.index.sync()
@@ -239,6 +243,7 @@ class ClaimStore:
                     quote=draft.quote, source_ref=source_ref,
                     session_key=session_key, message_id=message_id,
                     source_timestamp=source_timestamp, source_kind=source_kind,
+                    history_lines=history_lines,
                 ),
                 **draft.model_dump(exclude={"quote", "core", "person", "project", "aliases"}),
             )
@@ -333,7 +338,7 @@ class ClaimStore:
                     terms.add(line_text(line.text))
                 elif needle and needle in line_text(line.text).casefold():
                     matches.append(line)
-                if line.path in entity_paths and claim is None:
+                if line.path in entity_paths and claim is None and not HEADING_RE.match(line.text):
                     matches.append(line)
                     terms.add(line_text(line.text))
             history_matches = [
@@ -342,8 +347,9 @@ class ClaimStore:
                 if needle and needle in line.casefold()
             ]
             candidates = [
-                LineMatch(c.source_file or "", c.source_line or 0, f"[{c.claim_id}] {c.text}")
-                for c in targets.values()
+                LineMatch(line.path, line.line, f"[{claim.claim_id}] {claim.text}")
+                for line, claim, _ in lines
+                if claim is not None and targets.get(claim.claim_id) is claim
             ] + matches
             if not candidates:
                 candidates = history_matches
@@ -354,7 +360,40 @@ class ClaimStore:
                 )
             if needle and not all_matches and not ids and len(candidates) > 1:
                 return ForgetResult(candidates=candidates)
+            # Resolve the complete claim/quote closure before producing any file edits.
+            # Each pass expands IDs, evidence or terms; stop at their fixed point.
+            ids.update(targets)
+            sources = {
+                source for claim in targets.values() for source in claim.evidence.history_lines
+            }
             terms = {term for term in terms if len(term.strip()) >= 2}
+            while True:
+                before = (len(ids), len(terms), len(sources))
+                folded = [term.casefold() for term in terms]
+                discovered: set[str] = set()
+                for line, claim, markers in lines:
+                    haystack = line_text(line.text)
+                    if claim is not None:
+                        haystack += "\n" + (claim.quote or "")
+                    by_source = claim is not None and bool(
+                        sources.intersection(claim.evidence.history_lines)
+                    )
+                    if by_source or markers & ids or any(
+                        term in haystack.casefold() for term in folded
+                    ):
+                        discovered.update(markers - ids)
+                        if claim is not None:
+                            targets.setdefault(claim.claim_id, claim)
+                            sources.update(claim.evidence.history_lines)
+                            terms.add(claim.text)
+                            if claim.quote:
+                                terms.add(claim.quote)
+                        elif markers:
+                            terms.add(line_text(line.text))
+                ids.update(discovered)
+                terms = {term for term in terms if len(term.strip()) >= 2}
+                if before == (len(ids), len(terms), len(sources)):
+                    break
             folded = [term.casefold() for term in terms]
             remove: dict[str, set[int]] = {}
             events: list[LedgerEvent] = []
@@ -369,39 +408,39 @@ class ClaimStore:
                     at=now, run_id=run_id, source_ref=source,
                 ))
 
-            for claim_id in ids | targets.keys():
+            for claim_id in ids:
                 tombstone("claim", claim_id, None)
             if entity_page is not None:
                 tombstone("entity", entity_page[0].entity_id, None)
+            for source in sorted(sources):
+                tombstone("history", source, f"history:{source}")
+            # Existing summary claims may name only an entry. Revoke that known
+            # source without inventing which of its unrelated lines supported the claim.
+            for claim in targets.values():
+                entry = re.fullmatch(r"history:(\d+)", claim.evidence.source_ref or "")
+                if entry is not None and not claim.evidence.history_lines:
+                    tombstone("history", entry[1], f"history:{entry[1]}")
             removed: list[LineMatch] = []
             for line, claim, markers in lines:
                 haystack = line_text(line.text) + ("\n" + (claim.quote or "") if claim else "")
-                by_id = bool(markers & (ids | targets.keys()))
+                by_id = bool(markers & ids)
                 by_text = any(term in haystack.casefold() for term in folded)
-                if by_id or by_text:
+                by_source = bool(set(HISTORY_REF_RE.findall(line.text)) & sources)
+                if by_id or by_text or by_source:
                     remove.setdefault(line.path, set()).add(line.line)
                     text = line_text(line.text)
                     if len(text.strip()) >= 2:
                         tombstone("chunk", digest(text), f"{line.path}:{line.line}")
-                    for claim_id in markers - (ids | targets.keys()):
-                        tombstone("claim", claim_id, None)
-                        ids.add(claim_id)
-                    if claim is not None:
-                        targets.setdefault(claim.claim_id, claim)
-                    else:
+                    if claim is None:
                         removed.append(LineMatch(line.path, line.line, line.text.strip()))
-            for claim in targets.values():
-                terms.add(claim.text)
-                if claim.quote:
-                    terms.add(claim.quote)
-            terms = {term for term in terms if len(term.strip()) >= 2}
-            folded = [term.casefold() for term in terms]
             history_ids: list[int] = []
             for cursor, content in history_entries:
                 matched = False
                 for line in content.splitlines():
-                    if any(term in line.casefold() for term in folded):
-                        target = f"{cursor}:{digest(line)}"
+                    target = f"{cursor}:{digest(line)}"
+                    if target in sources:
+                        matched = True
+                    elif any(term in line.casefold() for term in folded):
                         tombstone("history", target, f"history:{target}")
                         matched = True
                 if matched:
@@ -422,7 +461,7 @@ class ClaimStore:
             self.index.sync()
             retracted = [
                 Claim(claim_id=claim_id, text="", status="retracted", updated_at=now)
-                for claim_id in sorted(ids | targets.keys())
+                for claim_id in sorted(ids)
             ]
             return ForgetResult(
                 retracted, removed, redact_terms=sorted(terms), history_ids=history_ids,
@@ -468,12 +507,13 @@ class ClaimStore:
                 ("entity", entity_id) in tombstones
                 for entity_id in (claim.person_id, claim.project_id)
             )
-            if forgotten_id or forgotten_text or forgotten_entity:
+            forgotten_source = any(
+                ("history", source) in tombstones for source in HISTORY_REF_RE.findall(line.text)
+            )
+            if forgotten_id or forgotten_text or forgotten_entity or forgotten_source:
                 removed.setdefault(line.path, set()).add(line.line)
             elif claim is not None:
                 current = claims[claim.claim_id]
-                if (line.path, line.line) != (current.source_file, current.source_line):
-                    continue
                 if current.status in {"expired", "superseded"}:
                     if claim.status != current.status or not line.path.startswith("memory/daily/"):
                         removed.setdefault(line.path, set()).add(line.line)
@@ -640,40 +680,15 @@ class ClaimStore:
     def project_lines(
         self, text: str, *, path: str, stable_core: bool = False,
     ) -> list[tuple[int, str]]:
-        """Preserve source positions through validity and stable-core filtering."""
+        with self.read_view() as view:
+            return view.project_lines(text, path=path, stable_core=stable_core)
+
+    @contextmanager
+    def read_view(self) -> Generator[MemoryReadView]:
         with self.lock:
             self.index.sync()
             with self.index.connect() as conn:
-                inactive_lines = {row[0] for row in conn.execute("""
-                    SELECT ch.line_start FROM chunks ch LEFT JOIN claims c
-                      ON c.claim_id=ch.claim_id AND c.path=ch.path AND c.line=ch.line_start
-                    WHERE ch.path=? AND (
-                        ch.current=0
-                        OR COALESCE(c.expires_at, json_extract(ch.metadata, '$.expires_at'))<=?
-                        OR (? AND COALESCE(c.kind, json_extract(ch.metadata, '$.kind'))
-                            IN ('commitment', 'progress'))
-                    )
-                """, (path, iso(self.clock()), stable_core))}
-            tombstones = self.documents.tombstones()
-            kept: list[tuple[int, str]] = []
-            for number, raw in enumerate(text.splitlines(), 1):
-                if number in inactive_lines:
-                    continue
-                if stable_core and raw.strip() in (SECTIONS["commitment"], SECTIONS["progress"]):
-                    continue
-                markers = marked_claim_ids(raw)
-                if any(("claim", claim_id) in tombstones for claim_id in markers):
-                    continue
-                if ("chunk", digest(line_text(raw))) in tombstones and not markers:
-                    continue
-                claim = decode_claim(raw, path, number, issues=set())
-                if claim is not None and any(
-                    ("entity", entity_id) in tombstones
-                    for entity_id in (claim.person_id, claim.project_id)
-                ):
-                    continue
-                kept.append((number, strip_claim_markers(raw)))
-            return kept
+                yield MemoryReadView(self.index, conn, iso(self.clock()))
 
     def project_text(self, text: str, *, path: str, stable_core: bool = False) -> str:
         lines = self.project_lines(text, path=path, stable_core=stable_core)

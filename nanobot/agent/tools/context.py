@@ -10,6 +10,7 @@ from nanobot.config.network import NetworkConfig
 
 if TYPE_CHECKING:
     from nanobot.agent.memory import MemoryStore
+    from nanobot.agent.memory_view import PromptMemory
     from nanobot.agent.subagent import SubagentManager
     from nanobot.agent.tools.exec_session import ExecSessionManager
     from nanobot.agent.tools.file_state import FileStates
@@ -49,6 +50,7 @@ class RequestContext:
     persist_session: bool = True
     # Effective tool scope; injected inputs retain the active run's scope.
     workspace_scope: WorkspaceScope | None = None
+    memory_view: PromptMemory | None = None
 
 
 @runtime_checkable

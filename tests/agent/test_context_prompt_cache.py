@@ -271,15 +271,16 @@ def test_customized_memory_md_is_injected(tmp_path, monkeypatch) -> None:
     )
 
     builder = ContextBuilder(workspace)
-    read_memory = builder.memory.read_memory
+    read_memory = Path.read_text
     calls = 0
 
-    def tracked_read_memory() -> str:
+    def tracked_read_memory(path, *args, **kwargs) -> str:
         nonlocal calls
-        calls += 1
-        return read_memory()
+        if path == workspace / "memory/MEMORY.md":
+            calls += 1
+        return read_memory(path, *args, **kwargs)
 
-    monkeypatch.setattr(builder.memory, "read_memory", tracked_read_memory)
+    monkeypatch.setattr(Path, "read_text", tracked_read_memory)
     prompt = builder.build_system_prompt()
 
     assert prompt.count("# Long-term Memory") == 1

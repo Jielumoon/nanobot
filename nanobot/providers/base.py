@@ -196,6 +196,7 @@ class ProviderConversationState:
     version: int
     payload: dict[str, Any] = field(default_factory=dict, repr=False)
     pending_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    context_generation: str | None = None
 
     def with_pending_messages(
         self,
@@ -209,6 +210,7 @@ class ProviderConversationState:
             version=self.version,
             payload=self.payload,
             pending_messages=deepcopy(messages),
+            context_generation=self.context_generation,
         )
 
     def to_private_record(self) -> dict[str, Any]:
@@ -220,6 +222,7 @@ class ProviderConversationState:
             "version": self.version,
             "payload": deepcopy(self.payload),
             "pending_messages": deepcopy(self.pending_messages),
+            "context_generation": self.context_generation,
         }
 
     @classmethod
@@ -237,6 +240,7 @@ class ProviderConversationState:
         version = data.get("version")
         payload = data.get("payload")
         pending = data.get("pending_messages", [])
+        context_generation = data.get("context_generation")
         if (
             not isinstance(kind, str)
             or not kind
@@ -248,6 +252,7 @@ class ProviderConversationState:
             or not isinstance(version, int)
             or not isinstance(payload, dict)
             or not isinstance(pending, list)
+            or (context_generation is not None and not isinstance(context_generation, str))
             or any(
                 not isinstance(message, dict)
                 for message in cast(list[object], pending)
@@ -261,6 +266,7 @@ class ProviderConversationState:
             version=version,
             payload=deepcopy(cast(dict[str, Any], payload)),
             pending_messages=deepcopy(cast(list[dict[str, Any]], pending)),
+            context_generation=context_generation,
         )
 
 

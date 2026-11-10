@@ -12,6 +12,7 @@ from loguru import logger
 
 from nanobot import __version__
 from nanobot.agent.dream import dream_running, run_dream
+from nanobot.agent.memory_coordination import MemoryOperationBusyError
 from nanobot.bus.events import OutboundMessage
 from nanobot.command.router import CommandContext, CommandRouter
 from nanobot.command.spec import BuiltinCommandSpec
@@ -438,7 +439,9 @@ async def cmd_dream_prompt(ctx: CommandContext) -> OutboundMessage:
     args = ctx.args.strip().lower()
 
     if args == "init":
-        if not initialize_workspace_prompt(path, store.default_dream_prompt()):
+        if not initialize_workspace_prompt(
+            path, store.default_dream_prompt(claims_enabled=store.claims is not None),
+        ):
             content = (
                 f"Dream 记忆整理规则文件已存在：`{display_path}`。\n\n"
                 "可直接编辑该文件；删除或清空文件即可恢复 nanobot 默认规则。"
@@ -714,7 +717,12 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
             )
         else:
             changed_files = _format_changed_files(result[1])
-            new_sha = store.restore_memory(sha, message_prefix=_DREAM_COMMIT_PREFIX)
+            try:
+                new_sha = store.restore_memory(sha, message_prefix=_DREAM_COMMIT_PREFIX)
+            except MemoryOperationBusyError as exc:
+                return OutboundMessage(
+                    channel=ctx.msg.channel, chat_id=ctx.msg.chat_id, content=str(exc),
+                )
             if new_sha:
                 content = (
                     f"已将 Dream 记忆恢复至 `{sha}` 变更之前的状态。\n\n"

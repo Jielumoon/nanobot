@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence, cast
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.memory_documents import Clock, strip_claim_markers, utc_now
+from nanobot.agent.memory_view import PromptMemory
 from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools import sessions as session_tools
@@ -67,6 +68,7 @@ class TranscriptInput:
     current_role: str = "user"
     session_summary: SessionSummary | None = None
     runtime_context_blocks: Sequence[RuntimeContextBlock] | None = None
+    memory_view: PromptMemory | None = None
 
     @property
     def message_count(self) -> int:
@@ -106,12 +108,15 @@ class ContextBuilder:
         session_summary: SessionSummary | None = None,
         workspace: Path | None = None,
         include_memory: bool = True,
+        memory_view: PromptMemory | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
         root = workspace or self.workspace
         parts = [self._get_identity(channel=channel, workspace=root)]
 
-        bootstrap = self._load_bootstrap_files(root)
+        if memory_view is None and self.memory.claims is not None:
+            memory_view = self.memory.prompt_view()
+        bootstrap = self._load_bootstrap_files(root, memory_view=memory_view)
         if bootstrap:
             parts.append(bootstrap)
 
@@ -126,10 +131,13 @@ class ContextBuilder:
             )
 
         if include_memory:
-            memory = self.memory.read_memory()
+            memory = (
+                memory_view.memory if memory_view is not None
+                else self.memory.prompt_memory(self.memory.read_memory())
+            )
             is_default = self._is_template_content(memory, "memory/MEMORY.md")
             if self.memory.claims is not None or (memory and not is_default):
-                prompt_memory = self.memory.prompt_memory("" if is_default else memory)
+                prompt_memory = "" if is_default else memory
                 if prompt_memory.strip():
                     parts.append(prompt_memory)
                     record_source(self.memory.memory_file, prompt_memory)
@@ -202,7 +210,9 @@ class ContextBuilder:
 
         return _to_blocks(left) + _to_blocks(right)
 
-    def _load_bootstrap_files(self, workspace: Path | None = None) -> str:
+    def _load_bootstrap_files(
+        self, workspace: Path | None = None, *, memory_view: PromptMemory | None = None,
+    ) -> str:
         parts: list[str] = []
         project_root = workspace or self.workspace
         sources = [
@@ -214,7 +224,10 @@ class ContextBuilder:
         for filename, root in sources:
             file_path = root / filename
             if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
+                content = (
+                    memory_view.user if filename == "USER.md" and memory_view is not None
+                    else file_path.read_text(encoding="utf-8")
+                )
                 if filename == "SOUL.md" and self._is_template_content(
                     content,
                     "legacy/SOUL.md",
@@ -228,11 +241,7 @@ class ContextBuilder:
                 ):
                     record_source(file_path, "", loaded=False)
                     continue
-                if filename == "USER.md" and self.memory.claims is not None:
-                    content = self.memory.claims.project_text(
-                        content, path="USER.md", stable_core=True,
-                    )
-                elif filename != "AGENTS.md":
+                if filename != "AGENTS.md":
                     content = strip_claim_markers(content)
                 parts.append(f"## {filename}\n\n{content}")
                 record_source(file_path, content)
@@ -259,6 +268,7 @@ class ContextBuilder:
         runtime_context_blocks: Sequence[RuntimeContextBlock] | None = None,
         workspace: Path | None = None,
         include_memory: bool = True,
+        memory_view: PromptMemory | None = None,
     ) -> list[dict[str, Any]]:
         """Compatibility wrapper for callers that need merged adjacent roles."""
         messages = self.build_transcript(
@@ -269,6 +279,7 @@ class ContextBuilder:
                 current_role=current_role,
                 session_summary=session_summary,
                 runtime_context_blocks=runtime_context_blocks,
+                memory_view=memory_view,
             ),
             channel=channel,
             workspace=workspace,
@@ -302,6 +313,10 @@ class ContextBuilder:
     ) -> list[dict[str, Any]]:
         """Build a model transcript while preserving the fresh-turn boundary."""
         root = workspace or self.workspace
+        memory_view = transcript.memory_view
+        if memory_view is None and self.memory.claims is not None:
+            query = transcript.current_message if transcript.current_role == "user" else None
+            memory_view = self.memory.prompt_view(query if include_memory else None)
         with self.skills.snapshot():
             with system_source_scope():
                 system_prompt = self.build_system_prompt(
@@ -309,6 +324,7 @@ class ContextBuilder:
                     session_summary=transcript.session_summary,
                     workspace=root,
                     include_memory=include_memory,
+                    memory_view=memory_view,
                 )
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
@@ -317,11 +333,15 @@ class ContextBuilder:
             if transcript.current_message is None:
                 return messages
 
+            blocks = list(transcript.runtime_context_blocks or ())
+            if memory_view is not None and memory_view.runtime is not None:
+                blocks = [block for block in blocks if block.source != "memory_recall"]
+                blocks.append(memory_view.runtime)
             current = self.build_current_message(
                 transcript.current_message,
                 media=list(transcript.media) if transcript.media else None,
                 current_role=transcript.current_role,
-                runtime_context_blocks=transcript.runtime_context_blocks,
+                runtime_context_blocks=blocks,
             )
             messages.append(current)
             return messages

@@ -105,7 +105,9 @@ class TestBuildDreamPrompt:
 
         assert result is not None
         prompt = result.prompt
-        assert prompt.startswith(store.default_dream_prompt() + "\n\n## Conversation History\n")
+        assert prompt.startswith(
+            store.default_dream_prompt(claims_enabled=False) + "\n\n## Conversation History\n",
+        )
 
     def test_truncates_long_entries_at_1000_chars(self, store):
         long_content = "x" * 2000

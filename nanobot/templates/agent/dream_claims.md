@@ -1,6 +1,6 @@
 ## Structured memory
 {% if claims_enabled %}
-Markdown entries and `memory/ledger.md` own memory state; SQLite is a rebuildable index. Use `memory_remember` for atomic durable claims. Non-core preferences, experiences, circumstances, and facts go to `memory/bank/preferences.md`, `experiences.md`, `circumstances.md`, and `facts.md` respectively. Decisions and commitments without an entity go to `bank/facts.md`; active commitments are injected every turn subject to the shared budget. Set `core=true` only for frequently needed stable information: preferences go to `USER.md`, other core claims to `memory/MEMORY.md`. Progress without a project goes to today's daily note.
+Markdown entries and `memory/ledger.md` own memory state; SQLite is a rebuildable index. Use `memory_remember` for atomic durable claims. Non-core preferences, experiences, circumstances, and facts go to `memory/bank/preferences.md`, `experiences.md`, `circumstances.md`, and `facts.md` respectively. Decisions and commitments without an entity go to `bank/facts.md`; active commitments are eligible for current-turn injection subject to project status, person mention gates, and shared budgets. Set `core=true` only for frequently needed stable information: preferences go to `USER.md`, other core claims to `memory/MEMORY.md`. Progress without a project goes to today's daily note.
 
 - Use `preference`, `fact`, `commitment`, `progress`, `experience`, `circumstance`, or `decision` according to the evidence.
 - Use `due_at` for a commitment deadline. An overdue promise is still active. Use `expires_at` only when the information itself stops being valid.
@@ -14,5 +14,5 @@ Markdown entries and `memory/ledger.md` own memory state; SQLite is a rebuildabl
 Versioned comments such as `<!-- claim:c_… {"v":1,...} -->` are managed metadata. Do not edit them with file tools or copy them into summaries. File writes are restricted to `SOUL.md` and skills; use memory tools for all managed entries and project status. Never edit `memory/ledger.md` or the Dream audit.
 {% endif %}
 {% if daily_notes %}
-Daily notes in `memory/daily/YYYY-MM-DD.md` record what happened in the agent's configured timezone. Keep summaries grounded in their source. Archived entries retain their IDs and status and are not current facts.
+Daily notes in `memory/daily/YYYY-MM-DD.md` record what happened in the agent's configured timezone. Keep summaries grounded in their source. Compaction summary mirrors are historical evidence, not current facts; default recall excludes them. Archived claims retain their IDs and status. Use include_history=true to inspect either kind of historical material.
 {% endif %}

@@ -381,7 +381,7 @@ async def test_schema_one_upgrades_from_markdown_without_rewriting_metadata(stor
     assert redacted.text == "" and redacted.quote is None
     assert path.read_bytes() == original
     with store.claims.index.connect() as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
     assert await store.backfill_embeddings() == 1
 
 
@@ -398,3 +398,24 @@ async def test_embedding_fingerprint_separates_model_provider_and_dimensions(sto
         fingerprints.add(other.embeddings.fingerprint)
     assert len(fingerprints) == 4
     assert {row["fingerprint"] for row in vector_rows(store)} == fingerprints
+
+
+async def test_memory_embedding_endpoint_change_backfills_separate_vector_space(store, api):
+    store.claims.remember(ClaimDraft(text="向量空间切换测试", kind="fact"))
+    api.default = [1, 0]
+    assert await store.backfill_embeddings() == 1
+    first = store.embeddings.fingerprint
+    providers = ProvidersConfig.model_validate({"openai": {
+        "apiKey": "test-key", "apiBase": "https://other-vectors.example/v1/",
+    }})
+    changed = MemoryStore(store.workspace, config=store.config, providers=providers)
+    assert changed.embeddings.fingerprint != first
+    api.default = [0, 1]
+    assert await changed.backfill_embeddings() == 1
+    assert api.create.await_count == 2
+    assert "向量空间切换测试" in await MemorySearchTool(changed).execute("另一种说法")
+    # Equivalent SDK base URLs must share one space/cache.
+    providers.openai.api_base = "https://other-vectors.example/v1"
+    equivalent = MemoryStore(store.workspace, config=store.config, providers=providers)
+    assert equivalent.embeddings.fingerprint == changed.embeddings.fingerprint
+    assert await equivalent.backfill_embeddings() == 0

@@ -32,6 +32,8 @@ CLAIM_COMMENT_RE = re.compile(r"[ \t]*<!--\s*claim:.*?(?:-->|$)", re.MULTILINE)
 ENTITY_RE = re.compile(r"<!--\s*entity:(\S+)\s+(\{.*?\})\s*-->")
 ENTITY_COMMENT_RE = re.compile(r"[ \t]*<!--\s*entity:.*?(?:-->|$)", re.MULTILINE)
 BULLET_RE = re.compile(r"^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?")
+HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
+HISTORY_REF_RE = re.compile(r" ?<!-- history:(\d+:[0-9a-f]{64}) -->")
 SECTIONS: dict[ClaimKind, str] = {
     "preference": "## 已记住的偏好", "fact": "## 已记住的事实",
     "commitment": "## 承诺与待办", "progress": "## 进度",
@@ -73,6 +75,7 @@ def digest(text: str) -> str:
 
 
 def strip_claim_markers(text: str) -> str:
+    text = HISTORY_REF_RE.sub("", text)
     return ENTITY_COMMENT_RE.sub("", CLAIM_COMMENT_RE.sub("", AUDIT_REF_RE.sub("", text)))
 
 
@@ -102,6 +105,7 @@ class Evidence(BaseModel):
     message_id: str | None = None
     source_timestamp: str | None = None
     source_kind: Literal["message", "summary"] | None = None
+    history_lines: tuple[str, ...] = ()
 
 
 class ClaimMetadata(BaseModel):
@@ -376,6 +380,22 @@ class MemoryDocuments:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
         self.ledger = workspace / "memory/ledger.md"
+        self._generation_stamp: tuple[int, int] | None = None
+        self._generation = ""
+
+    def generation(self) -> str:
+        """Last durable forget event, independent of the rebuildable database and Git restore."""
+        try:
+            stat = self.ledger.stat()
+        except FileNotFoundError:
+            return ""
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if stamp != self._generation_stamp:
+            self._generation = next((
+                event.event_id for event in reversed(self.events()) if event.action == "forget"
+            ), "")
+            self._generation_stamp = stamp
+        return self._generation
 
     def files(self) -> list[Path]:
         paths = [self.workspace / "USER.md", self.workspace / "memory/MEMORY.md"]
@@ -444,9 +464,12 @@ class DailyNotes:
             atomic_write_text(path, insert_lines(content, heading, body))
         return path
 
-    def append_summary(self, summary: str, *, session_key: str | None = None) -> Path | None:
+    def append_summary(
+        self, summary: str, *, session_key: str | None = None, cursor: int | None = None,
+    ) -> Path | None:
         lines = [
             strip_claim_markers(re.sub(r"^(\s*[-*]\s*)\[[a-z]+\]\s*", r"\1", line))
+            + (f" <!-- history:{cursor}:{digest(line)} -->" if cursor is not None else "")
             for line in summary.splitlines() if line.strip() and line.strip() != "(nothing)"
         ]
         source = f" · {session_key}" if session_key else ""

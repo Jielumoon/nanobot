@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import math
 from array import array
+from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from loguru import logger
 from openai import APIError, AsyncOpenAI, DefaultAsyncHttpxClient, omit
 
 from nanobot.agent.memory_index import QueryEmbedding
+from nanobot.config.memory import resolve_embedding_provider
 from nanobot.config.network import NetworkConfig
-from nanobot.config.schema import MemoryEmbeddingConfig, ProviderConfig, ProvidersConfig
-from nanobot.providers.registry import find_by_name
+from nanobot.config.schema import MemoryEmbeddingConfig, ProvidersConfig
 
 if TYPE_CHECKING:
     from nanobot.agent.memory_claims import ClaimStore
@@ -28,24 +29,18 @@ class MemoryEmbeddings:
         self, claims: ClaimStore, config: MemoryEmbeddingConfig,
         providers: ProvidersConfig, network: NetworkConfig,
     ) -> None:
-        provider = getattr(providers, config.provider, None)
-        if not isinstance(provider, ProviderConfig):
-            raise ValueError(f"记忆向量配置无效：providers.{config.provider} 不存在")
-        if not provider.api_key:
-            raise ValueError(f"记忆向量配置无效：请设置 providers.{config.provider}.apiKey")
-        spec = find_by_name(config.provider)
-        base = provider.api_base or (spec.default_api_base if spec else None)
-        if not base and config.provider == "openai":
-            base = "https://api.openai.com/v1"
-        if not base:
-            raise ValueError(f"记忆向量配置无效：请设置 providers.{config.provider}.apiBase")
+        resolved = resolve_embedding_provider(config, providers, network)
         self.claims = claims
         self.config = config
-        self.provider = provider
-        self.api_base = base
-        self.proxy = network.resolve_proxy(provider.use_proxy)
+        self.provider = resolved.provider
+        self.api_base = resolved.api_base
+        self.proxy = resolved.proxy
+        routing = json.dumps(
+            [self.provider.extra_headers, self.provider.extra_query], sort_keys=True,
+        )
         self.fingerprint = json.dumps(
-            [config.provider, config.model, config.dimensions], separators=(",", ":"),
+            [config.provider, self.api_base, config.model, config.dimensions,
+             sha256(routing.encode()).hexdigest()], separators=(",", ":"),
         )
 
     def _provider_client(self) -> AsyncOpenAI:

@@ -39,7 +39,7 @@ Markdown 和 `ledger.md` 是持久状态来源。每条 claim 的行尾含版本
 
 代码写入的完整元数据还包括创建/更新时间、来源、到期时间、取代链接和人物/项目 ID。注入模型时会去掉机器注释。旧的 `<!-- claim:c_… -->` 仍可读取；旧行缺少的证据、时间或置信度保持未知，删库重建不会伪造这些值。保留新格式行及账本时，重建可以恢复其原有元数据。
 
-手工编辑后，下一次读取、检索或构建记忆上下文会按文件内容哈希同步投影，不改写 Markdown。坏标记或坏 JSON 按普通文本索引；重复 claim marker 只有第一处作为 claim，其余作为普通文本。相同文件内容的问题只告警一次。显式维护 `reconcile_files()` 才会清除被遗忘的恢复行、整理归档及删除已遗忘实体页；Dream 和记忆恢复会调用这一步。
+手工编辑后，下一次读取、检索或构建记忆上下文会按文件内容哈希同步投影，不改写 Markdown。坏标记或坏 JSON 按普通文本索引；重复 claim marker 只有第一处作为 claim，其余作为普通文本，但同一 ID 已失效时所有副本都退出当前召回，不会因旧副本仍标为 active 而复活。相同文件内容的问题只告警一次。显式维护 `reconcile_files()` 才会清除被遗忘的恢复行、整理归档及删除已遗忘实体页；Dream 和记忆恢复会调用这一步。
 
 ## 数据怎样流动
 
@@ -58,7 +58,7 @@ Markdown 和 `ledger.md` 是持久状态来源。每条 claim 的行尾含版本
 ```
 
 - **明确记住或纠正**：主 agent 当轮调用记忆工具，来源由运行时写入 `session_key`、`message_id`，actor 为 `user`。普通闲聊不需要每轮额外调用 LLM 抽取。
-- **compact**：现有压缩流程生成摘要，带短原话及来源写入 history；开启 `dailyNotes` 时同时镜像到当天笔记。摘要是压缩后的证据，不等同于逐字聊天原文。
+- **compact**：现有压缩流程生成摘要，带短原话及来源写入 history；开启 `dailyNotes` 时同时镜像到当天笔记，行尾保存 history cursor 和来源行摘要哈希。daily 会话摘要属于历史材料，默认不检索、不注入；使用 `include_history=true` 可查询并看到 `historical` 状态。旧版 daily 的「会话摘要」节也按历史材料处理。摘要是压缩后的证据，不等同于逐字聊天原文；只有独立保存的当前有效 claim 才按人物、项目和生命周期规则参与自动召回。
 - **Dream**：定时任务与 `/dream` 共用协调器。每个 workspace 同一时刻只跑一个；每批最多读取 20 条未处理 history，为摘要和行生成 `[h:123]`、`[h:123:2]` 等 evidence handle。模型只能引用当前批次的来源，写入时再次检查来源没有被遗忘或修改。actor、run_id 和来源信息由运行时注入。
 - **反思与抽取**：先记录反思，低证据推断放「待确认」；有证据的内容通过 `memory_remember` 写入，项目状态通过 `memory_project` 修改。人物抽取必须有来源中可核验的原话。下一次 Dream 最多带入约 1800 字符的近期待确认项，它们不算证据。
 - **收尾维护**：代码按 run_id 写审计，记录相关事件、claim ID、简短正文与内容提交 SHA；已遗忘条目不写正文。成功完成后才推进 cursor。没有新 history 也会执行过期归档、tombstone 清理及限量向量补算，不为此调用 Dream LLM。等待 LLM 或 embedding API 时不持文件锁。
@@ -120,7 +120,7 @@ Markdown 和 `ledger.md` 是持久状态来源。每条 claim 的行尾含版本
 
 ## 注入与检索策略
 
-记忆的 system prompt 部分只放稳定 core：`USER.md` 和 `MEMORY.md` 的当前内容，过滤结构化承诺、进度、失效及被遗忘条目。`injectMaxChars=6000` 限制的是 `MEMORY.md`，不是整个 system prompt，也不限制 `USER.md`。截断提示是固定文字。查询变化不会把 bank、人物或项目资料拼进 system prompt；实际修改 core 后，system 内容才随之变化。
+记忆的 system prompt 部分只放稳定 core：`USER.md` 和 `MEMORY.md` 的当前内容，过滤结构化承诺、进度、人物/项目关联条目、失效及被遗忘条目。`injectMaxChars=6000` 限制的是 `MEMORY.md`，不是整个 system prompt，也不限制 `USER.md`。截断提示是固定文字。查询变化不会把 bank、人物或项目资料拼进 system prompt；实际修改 core 后，system 内容才随之变化。
 
 消息侧由一个 memory runtime context provider 统一添加，包含包装文字在内总预算约 **4500 字符**，按 ID 和正文去重，优先级为：
 
@@ -129,7 +129,9 @@ Markdown 和 `ledger.md` 是持久状态来源。每条 claim 的行尾含版本
 3. 本轮提到的人：每人约 600 字符，总计约 1500。英文按词边界匹配，中文按完整名或显式别名匹配；单字、歧义名称不自动注入。
 4. 查询召回：默认最多 5 条，从 core、bank、projects、people、daily 中召回未在 system 或前述部分显示的当前条目。先过滤状态、项目/人物范围和排除项，再限候选；短 `MEMORY.md` 也参与检索。
 
-自动注入会排除 completed/paused 项目和未提及的人物。主动调用 `memory_search` 的范围更宽，适合查阅这些已保存资料。结构化记忆关闭后不提供这些工具或动态记忆块，回到原有文件记忆行为。
+自动注入的每条路径（包括承诺和项目摘要）都会排除 completed/paused 项目和未提及的人物；所有路径共用每人 600、总计 1500 字符的人物预算。主动调用 `memory_search` 的范围更宽，适合查阅这些已保存资料。结构化记忆关闭后不提供这些工具或动态记忆块，回到原有文件记忆行为。
+
+每轮构建 prompt 只做一次文件哈希同步，core 排除项、实体和动态召回复用同一读视图；承诺、最近项目和已提及人物使用按需、有上限的查询，不先加载全量 claim。主 agent 的准备工作在已有受限 worker 中执行，LLM 等待期间不持文件锁。词面搜索流式评分，仅保留有界候选，避免把全部命中载入 Python 后排序。
 
 关键词索引使用 SQLite FTS5 trigram；两字中文通过同一 chunks 表的 `LIKE` 查询。只有 SQLite 不支持 FTS5 或 trigram 时才完全使用 `LIKE`，其他数据库错误不会被静默降级。中文按相邻字片段匹配，并过滤一组常见停用词，**没有真正的分词或语义理解**；共享字片段仍可能误召回，不同说法也可能漏召回。请结合来源、状态和 `memory_explain` 判断，不要把检索结果当作已核验的结论。
 
@@ -137,7 +139,7 @@ Markdown 和 `ledger.md` 是持久状态来源。每条 claim 的行尾含版本
 
 遗忘先把 tombstone 写入 `memory/ledger.md`，再清理文件和投影。账本保存 ID、动作、actor、run_id、时间、来源或行摘要哈希，不保存正文与引文。即使后续文件写入失败，读取投影也会过滤已遗忘目标，之后的维护再完成物理文件清理。
 
-确认目标后，清理覆盖 USER.md、MEMORY.md、bank、projects、people、daily、dreams 中匹配的行，以及 history 中匹配的摘要行。按 ID 遗忘也会使用该条正文和 quote 清理副本；长度不足两个字符的内容不作为删除词，避免单字误删。history 只把命中行替换为 `[已遗忘]`，保留同一摘要里的其他要点。按人物/项目确认全部遗忘时，也会记录 entity tombstone 并删除实体页。
+确认目标后，先基于同一文件快照求完整的目标及正文/quote 关联集合，再统一清理 USER.md、MEMORY.md、bank、projects、people、daily、dreams 中匹配的行（包括标题），以及 history 中匹配的摘要行。按 ID 遗忘也会使用该条正文和 quote 清理副本；新保存的 Dream claim 还通过来源 cursor/行哈希直接撤销原始来源，即使保存正文是改写也会清理对应 history 行和 daily 镜像。由同一来源行生成的关联 claim 一并撤销，旧 handle 不能再次保存；旧条目若只记录了整条 history 来源，会撤销该条来源供 Dream 使用的资格，避免旧 handle 再生成记忆；缺少行级元数据时不猜测或整条抹掉原摘要，只清理可定位的正文/quote 副本，原摘要中的其他信息仍保留。长度不足两个字符的内容不作为删除词，避免单字误删。history 只把命中行替换为 `[已遗忘]`，保留同一摘要里的其他要点。按人物/项目确认全部遗忘时，也会记录 entity tombstone 并删除实体页。成功结果只含 ID、位置、数量和状态，不把删除正文再次返回模型；正文预览只用于执行前的歧义确认。
 
 保留账本时，恢复原标记行、恢复实体页或删除 `claims.sqlite3` 后重建，都不能让已记录的遗忘目标重新参与召回。`sync` 只过滤，Dream 或 `reconcile_files()` 才显式清掉恢复的文件内容。这个承诺针对已记录的 ID 和行摘要；它不是覆盖所有改写、同义表达或新来源的语义黑名单。手工删行、取代、过期也不等于永久遗忘。
 
@@ -145,14 +147,14 @@ Markdown 和 `ledger.md` 是持久状态来源。每条 claim 的行尾含版本
 
 `/dream-log` 查看代码生成的变更记录；`/dream-restore` 列出可恢复版本。`/dream-restore <sha>` 的含义是：**把受管文件集合恢复到该提交的父快照，即该次修改发生之前**，不是只反向修改该次 diff，也不是恢复到该 SHA 本身。父快照中不存在的受管页面会删除。
 
-恢复集合包括 SOUL、USER、MEMORY、daily、bank、projects、people、dreams 和 Dream cursor，**不回滚 ledger**。恢复后立即执行文件清理、history 清理和投影同步，再记录恢复提交。`history.jsonl` 本身不在 Git 快照集合中。SQLite、WAL、SHM 不纳入记忆 Git。
+恢复集合包括 SOUL、USER、MEMORY、daily、bank、projects、people、dreams 和 Dream cursor，**不回滚 ledger**。恢复与 Dream 使用同一个 workspace 准入门；正在整理或恢复时，另一操作直接提示稍后再试，避免旧 Dream 覆盖恢复后的 cursor。恢复后立即执行文件清理、history 清理和投影同步，再记录恢复提交。归档已写成但源文件清理失败时，维护按 ID 的最终状态清理所有副本。`history.jsonl` 本身不在 Git 快照集合中。SQLite、WAL、SHM 不纳入记忆 Git。
 
 GitStore 在独立 workspace 中初始化专用仓库，并为已有记忆仓库补充忽略规则；workspace 位于已有父级 Git 仓库内时不会再创建嵌套仓库。若你自行管理这些文件的版本，请同时管理恢复和备份策略。
 
 ### 遗忘不覆盖哪些地方
 
 - **原始聊天、当前会话摘要、分支和其他客户端副本**：`sessions.sqlite3` 不会被 `memory_forget` 修改，当前聊天仍可能看到你之前说过的话。删除相关聊天并开启新对话；需要隔离的内容不要继续放进同一条旧对话。
-- **provider 不透明续接状态**：模型重放会去掉旧轮次的 memory 来源 runtime context 块，保留其他 runtime context，并且不改写会话库。但 provider 的续接状态可能仍含旧记忆；本地清理不会自动使其失效。当前没有针对遗忘事件的续接状态失效机制。新会话可避免继续沿用本地旧会话；服务端的保留和删除仍由 provider 管理。
+- **provider 服务端留存**：本地续接状态现在带有 workspace 记忆代次，代次来自 ledger 最近一次遗忘事件。遗忘后不再复用旧代次的续接状态；同轮 runner 在下一次模型请求前也丢弃旧续接、重建 core 并移除旧 memory 来源块，保留其他 runtime context。原始会话不被改写。已经发出的请求无法追回，provider 服务端的数据保留和删除仍由其管理；本机制也不会清理原始聊天、当前会话摘要或先前工具结果中的副本。
 - **Git 历史、提交消息、备份、导出、日志及旧 HISTORY 迁移备份**：遗忘只清理当前受管内容，不重写过去的提交或外部副本。过去的文件版本和变更说明仍可能包含原文。
 - **其他文件**：SOUL.md、自定义 prompts、skills 和任意项目文件不属于 `memory_forget` 的扫描范围；如果你把个人事实写入这些地方，需要单独清理。
 
@@ -209,7 +211,7 @@ WebUI 的记忆设置提供 Dream 整理、条目记忆、关系页和语义检�
 
 ### 老 workspace 升级
 
-缺省字段现在开启 claims、daily 和 people，并把 MEMORY.md 预算设为 6000；配置里明确写出的 `false` 或 `0` 会保留，不会被默认值覆盖。读取已有 Markdown 不重排、不添加标记；第一次保存新条目时才追加相应节。已有未标记正文继续作为普通文本检索。旧索引版本 0/1 会重建为版本 2，向量缓存可丢弃，不会因此修改 Markdown；旧 `HISTORY.md` 的既有迁移流程仍可能创建 journal 和备份。
+缺省字段现在开启 claims、daily 和 people，并把 MEMORY.md 预算设为 6000；配置里明确写出的 `false` 或 `0` 会保留，不会被默认值覆盖。读取已有 Markdown 不重排、不添加标记；第一次保存新条目时才追加相应节。已有未标记正文继续作为普通文本检索。旧索引版本 0/1/2 会重建为版本 3，以应用摘要历史状态和重复 marker 的生命周期规则，向量缓存可丢弃，不会因此修改 Markdown；旧 `HISTORY.md` 的既有迁移流程仍可能创建 journal 和备份。
 
 回到原有文件记忆模式时，合并以下片段并重启。仅关闭 Dream 不等于关闭结构化记忆；仅关闭 claims 也不会停止单独开启的每日摘要镜像。
 
@@ -233,11 +235,11 @@ WebUI 的记忆设置提供 Dream 整理、条目记忆、关系页和语义检�
 
 ### 可选 embedding
 
-先配置支持 embeddings 的 provider，再开启 `memory.embedding.enabled`。连接复用 `providers.<name>.apiKey`、`apiBase`、`extraHeaders`、`extraQuery` 和 `useProxy`；代理地址来自 `network.proxy`，不隐式使用环境代理。模型与维度由 `memory.embedding` 单独指定。缺 provider、缺 key 或必要连接地址会明确报错，不会当作普通服务故障吞掉。
+先配置支持 embeddings 的 provider，再开启 `memory.embedding.enabled`。连接复用 `providers.<name>.apiKey`、`apiBase`、`extraHeaders`、`extraQuery` 和 `useProxy`；代理地址来自 `network.proxy`，不隐式使用环境代理。模型与维度由 `memory.embedding` 单独指定。缺 provider、缺 key 或无效连接地址/代理会明确报错，不会当作普通服务故障吞掉。WebUI 保存相关开关时复用纯配置校验，不发送网络请求；校验失败会拒绝整个设置 patch，防止开关保存成功却令 gateway 无法重启。
 
-只有 active 且未过期的 claim 建向量，普通 Markdown 行仍走关键词检索。缓存键为 claim ID、正文哈希及 provider/model/dimensions 指纹，BLOB 使用归一化 float32。正文变更、遗忘、取代、过期会移除相应缓存；换模型或维度后由后续 Dream 逐批补算。初始化或日常检索不会批量补算文档向量；手动和定时 Dream 收尾都会补算，包括无新 history 的轮次。
+只有 active 且未过期的 claim 建向量，普通 Markdown 行仍走关键词检索。缓存键为 claim ID、正文哈希及 provider、规范化实际 endpoint、model、dimensions 和路由参数指纹（headers/query 只保存哈希），BLOB 使用归一化 float32。正文变更、遗忘、取代、过期会移除相应缓存；换 endpoint、模型、维度或路由参数后使用独立向量空间，由后续 Dream 逐批补算，不混用旧缓存。初始化或日常检索不会批量补算文档向量；手动和定时 Dream 收尾都会补算，包括无新 history 的轮次。
 
-每次查询请求一次查询向量，在工作线程里流式计算余弦，使用有界堆保留候选；当前余弦阈值为 0.3，双方各取至多 `4 × limit` 候选，用等权 RRF（`k=60`）融合。API 错误、坏 JSON 或无效向量响应会告警并回到关键词检索，内部数据库错误仍抛出。开启后会把待补算 claim 正文和查询文本发送给该 provider，可能产生费用；关闭时不调用 embedding API。
+每次查询请求一次查询向量，在工作线程里流式计算余弦，使用有界堆保留候选；当前余弦阈值为 0.3，词面侧与向量侧都仅保留至多 `4 × limit` 候选，用等权 RRF（`k=60`）融合。API 错误、坏 JSON 或无效向量响应会告警并回到关键词检索，内部数据库错误仍抛出。开启后会把待补算 claim 正文和查询文本发送给该 provider，可能产生费用；关闭时不调用 embedding API。
 
 ## 1 核 1 GB 建议与基准
 
@@ -245,7 +247,7 @@ WebUI 的记忆设置提供 Dream 整理、条目记忆、关系页和语义检�
 
 需要语义检索时，可从服务支持的较低维度（例如 512）和 `batchSize=16` 或 32 开始。一次 `/dream` 不会补齐大库，重复运行或等待后续周期即可。向量扫描为线性复杂度，数据量和维度增长都会增加 CPU 时间；线程只避免阻塞事件循环，不会消除 CPU 成本。关闭 Dream 定时任务后，需要手动 `/dream` 才能补算；API 延迟与费用不在本地扫描基准内。
 
-D1 实测使用 Python 3.12.15、Linux x86_64、合成归一化正值向量，1 万条 × 512 维，top-5，预热一次后计时 5 次。它衡量实际 SQLite 流式扫描、有界候选选择与融合，不包含 API、Markdown 同步、上下文装配或真实模型效果，也不是对所有 1 核 1 GB 主机的性能保证。
+以下保留 D1 基线实测（当前版本已进一步改为有界词面候选和共享读取视图，数字不是本轮重新测得）：使用 Python 3.12.15、Linux x86_64、合成归一化正值向量，1 万条 × 512 维，top-5，预热一次后计时 5 次。它衡量实际 SQLite 流式扫描、有界候选选择与融合，不包含 API、Markdown 同步、上下文装配或真实模型效果，也不是对所有 1 核 1 GB 主机的性能保证。
 
 | 指标 | 实测 |
 |---|---|
@@ -291,4 +293,4 @@ CI 只用脚本化 provider 测试这个评测入口，既验证成功路径，�
 
 ## 定制 Dream
 
-`/dream-prompt init` 在当前 workspace 创建 `prompts/dream.md`。其中有内容时作为该 workspace 的 Dream 指南，当前 history 及 evidence handle 仍由运行时追加；删除文件或置空即可恢复默认。将偏好写成简短规则，低证据推断继续放入「待确认」，不要要求模型绕过来源校验或把全部反思灌回 core。
+`/dream-prompt init` 在当前 workspace 创建 `prompts/dream.md`。其中有内容时作为该 workspace 的 Dream 指南，当前 history 及 evidence handle 仍由运行时追加；删除文件或置空即可恢复默认。将偏好写成简短规则，低证据推断继续放入「待确认」，不要要求模型绕过来源校验或把全部反思灌回 core。内置指南按 structured/legacy 模式渲染：结构化模式只通过记忆工具维护受管页面，普通过期/取代由代码归档，不能用永久遗忘代替日常清理；旧文件模式仍允许定点编辑。自定义指南若沿用了旧模板，应同步这些维护规则。
