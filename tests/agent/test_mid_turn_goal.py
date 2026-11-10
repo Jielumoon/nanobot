@@ -113,7 +113,7 @@ async def test_scheduled_goal_command_cannot_generate_internal_input(tmp_path):
     try:
         await loop._dispatch_command_inline(msg, msg.session_key, msg.content, loop.commands.dispatch)
         response = loop.bus.outbound.get_nowait()
-        assert "only be started by a user" in response.content
+        assert "只能由用户" in response.content
         assert loop._pending_queues == {}
         assert goal_mutation_allowed() is False
         assert (await loop.sessions.state.get(msg.session_key)).messages == []

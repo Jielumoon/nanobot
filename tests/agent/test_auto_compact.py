@@ -610,7 +610,7 @@ class TestAutoCompactIdleDetection:
         ctx = CommandContext(msg=msg, session=session, key="cli:test", raw=raw, loop=loop)
         result = await loop.commands.dispatch_priority(ctx)
         assert result is not None
-        assert "stopped" in result.content.lower() or "no active task" in result.content.lower()
+        assert "已停止" in result.content or "没有正在运行的任务" in result.content
 
         session_after = loop.sessions.get_or_create("cli:test")
         assert any(m["content"] == "old message" for m in session_after.messages)
@@ -632,7 +632,7 @@ class TestAutoCompactIdleDetection:
         response = await loop._process_message(msg)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert "已开始新对话" in response.content
 
         session_after = loop.sessions.get_or_create("cli:test")
         assert len(session_after.messages) == 0
