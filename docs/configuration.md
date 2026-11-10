@@ -40,6 +40,7 @@ This page is the complete configuration reference. For task-oriented setup, use 
 | Name and switch model choices | [Model Presets](#model-presets) |
 | Add fallback chains | [Model Fallbacks](#model-fallbacks) |
 | Configure voice transcription | [Transcription Settings](#transcription-settings) |
+| 配置长期记忆与语义检索 | [记忆](#记忆) |
 | Tune channel defaults | [Channel Settings](#channel-settings) |
 | Configure local file search | [File Search](#file-search) |
 | Configure web search and fetch | [Web Tools](#web-tools) |
@@ -2540,6 +2541,56 @@ The deprecated `agents.defaults.failOnToolError` field is silently ignored when 
 |--------|---------|-------------|
 | `agents.defaults.maxConcurrentSubagents` | `4` | Maximum number of subagents that may run at the same time. Additional tasks wait for capacity. |
 
+
+## 记忆
+
+在 WebUI 记忆设置中切换 Dream 整理、条目记忆、关系页和语义检索；按界面要求重启 gateway。其余预算、模型和批量参数直接编辑 `agents.defaults.memory`。完整文件布局、遗忘边界、升级行为和评测方法见 [长期记忆](memory.md)。
+
+| 字段（`agents.defaults.memory` 下） | 默认值 | 说明 |
+|---|---|---|
+| `claimsEnabled` | `true` | 结构化条目、工具及消息侧动态召回 |
+| `dailyNotes` | `true` | compact 摘要镜像；关闭不禁止进度和归档写入 daily |
+| `people.enabled` | `true` | 有证据的人物记忆与按提及注入 |
+| `injectMaxChars` | `6000` | MEMORY.md 的 system 内容预算；`0` 不截断，claims 关闭时不应用 |
+| `recallLimit` | `5` | 当轮查询召回条数，1–20 |
+| `commitmentLimit` | `5` | 当轮优先列出的承诺数，0–20 |
+| `embedding.enabled` | `false` | 远程语义检索，关闭时零 embedding API 调用 |
+| `embedding.provider` | `openai` | 引用 `providers.<name>` 的 key、base、headers、query 和 proxy 配置 |
+| `embedding.model` | `text-embedding-3-small` | embedding 模型 |
+| `embedding.dimensions` | `null` | 使用服务默认维度，或指定模型支持的正整数 |
+| `embedding.batchSize` | `32` | 每次 Dream 最多补算数，1–256 |
+
+缺省配置现在启用 claims、daily 和 people；已有明确的 `false` / `0` 不会被覆盖。升级不会重写已有 Markdown，首次写入才追加新节，旧 SQLite 投影可以从文件重建。若要回到旧文件记忆行为，显式关闭 claims、daily、people 和 embedding；关闭功能不删除文件。遗忘账本不回滚，但旧文件模式不执行结构化过滤，切换前应先完成清理。
+
+<details>
+<summary>手动配置示例</summary>
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memory": {
+        "claimsEnabled": true,
+        "dailyNotes": true,
+        "people": { "enabled": true },
+        "injectMaxChars": 6000,
+        "embedding": {
+          "enabled": false,
+          "provider": "openai",
+          "model": "text-embedding-3-small",
+          "dimensions": null,
+          "batchSize": 32
+        }
+      },
+      "dream": { "enabled": true, "intervalH": 2, "modelOverride": null }
+    }
+  }
+}
+```
+
+</details>
+
+Dream 另由 `agents.defaults.dream` 控制：默认每 2 小时整理，`cron` 可覆盖间隔，`modelOverride` 接受 `modelPresets` 名称。关闭定时任务后仍可手动 `/dream`。向量只在 Dream 收尾限量补算；开启语义检索前需配置支持 embeddings 的 provider，会发送记忆正文和查询并可能产生 API 费用。服务故障退回关键词检索，缺 provider/key 等配置错误会明确报错。
 
 ## Auto Compact
 

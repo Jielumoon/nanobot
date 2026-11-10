@@ -8,7 +8,9 @@ import pytest
 
 from nanobot.utils.prompt_templates import render_template
 
-_ARCHIVE_PROMPT = render_template("agent/consolidator_archive.md", strip=True)
+_ARCHIVE_PROMPT = render_template(
+    "agent/consolidator_archive.md", strip=True, claims_enabled=True,
+)
 
 
 class TestNewCommandArchival:

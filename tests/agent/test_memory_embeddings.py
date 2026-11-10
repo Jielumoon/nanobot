@@ -268,6 +268,21 @@ async def test_invalid_embedding_response_falls_back_at_api_boundary(store, api,
     api.warning.assert_called_once()
 
 
+async def test_overflowing_json_embedding_is_not_cached(store, api):
+    store.claims.remember(ClaimDraft(text="保留有效咖啡偏好", kind="preference"))
+    api.create.side_effect = None
+    # Valid JSON syntax and accepted by the SDK, but unusable as a vector.
+    api.create.return_value = CreateEmbeddingResponse.model_validate_json('''{
+        "data": [{"index": 0, "object": "embedding", "embedding": [1e309, 1.0]}],
+        "model": "test-model", "object": "list",
+        "usage": {"prompt_tokens": 1, "total_tokens": 1}
+    }''')
+    assert await store.backfill_embeddings() == 0
+    assert vector_rows(store) == []
+    assert "保留有效咖啡偏好" in await MemorySearchTool(store).execute("咖啡")
+    assert api.warning.call_count == 2
+
+
 async def test_internal_vector_query_errors_propagate(store, api, monkeypatch):
     def broken(*args, **kwargs):
         raise sqlite3.OperationalError("disk I/O error")

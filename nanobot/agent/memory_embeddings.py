@@ -72,8 +72,8 @@ class MemoryEmbeddings:
                 if len(item.embedding) != dimensions:
                     raise InvalidEmbeddingResponseError("向量响应维度不一致")
                 norm = math.sqrt(sum(value * value for value in item.embedding))
-                if norm == 0:
-                    raise InvalidEmbeddingResponseError("向量响应包含零向量")
+                if not math.isfinite(norm) or norm == 0:
+                    raise InvalidEmbeddingResponseError("向量响应必须包含有限的非零向量")
                 vectors.append(array("f", (value / norm for value in item.embedding)))
             return vectors
         except (APIError, json.JSONDecodeError, InvalidEmbeddingResponseError) as exc:

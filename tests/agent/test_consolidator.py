@@ -26,7 +26,9 @@ from nanobot.session.manager import Session
 from nanobot.utils.llm_runtime import LLMRuntime
 from nanobot.utils.prompt_templates import render_template
 
-_ARCHIVE_PROMPT = render_template("agent/consolidator_archive.md", strip=True)
+_ARCHIVE_PROMPT = render_template(
+    "agent/consolidator_archive.md", strip=True, claims_enabled=True,
+)
 
 
 @pytest.fixture
@@ -1478,9 +1480,7 @@ class TestCompactIdleSession:
             "new user",
             "new answer",
         ]
-        assert sent[-1]["content"] == render_template(
-            "agent/consolidator_archive.md", strip=True, claims_enabled=True,
-        )
+        assert sent[-1]["content"] == _ARCHIVE_PROMPT
 
     @pytest.mark.asyncio
     async def test_reuses_real_prefix_for_unified_session_workspace(
