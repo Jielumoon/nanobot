@@ -120,6 +120,7 @@ if TYPE_CHECKING:
     from nanobot.config.schema import (
         ChannelsConfig,
         Config,
+        ProvidersConfig,
         ToolsConfig,
     )
     from nanobot.cron.service import CronService
@@ -311,6 +312,7 @@ class AgentLoop:
         recovery_admission: RecoveryAdmission | None = None,
         builtin_assembly: Callable[[SessionManager, MessageBus, ToolRegistry, CommandRouter], ExecutionPolicy] | None = None,
         memory_config: MemoryConfig | None = None,
+        memory_providers: ProvidersConfig | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -380,6 +382,8 @@ class AgentLoop:
             timezone=timezone,
             disabled_skills=disabled_skills,
             memory_config=memory_config,
+            providers=memory_providers,
+            network=self.network_config,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # One file-read/write tracker per logical session. The tool registry is
@@ -527,6 +531,7 @@ class AgentLoop:
             model_preset=defaults.model_preset,
             dream_model_preset=defaults.dream.model_override,
             memory_config=defaults.memory,
+            memory_providers=config.providers,
             restart_mode=config.gateway.restart_mode,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,

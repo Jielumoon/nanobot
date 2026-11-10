@@ -2,24 +2,29 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import re
 import sqlite3
+from array import array
 from collections.abc import Generator, Iterable, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from loguru import logger
 
 from nanobot.agent.memory_documents import (
     Claim,
+    Clock,
     Evidence,
     MemoryDocuments,
     decode_claim,
     decode_entity,
     digest,
+    iso,
     line_text,
     marked_claim_ids,
+    utc_now,
 )
 
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]+")
@@ -27,6 +32,8 @@ _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _MAX_QUERY_TERMS = 32
 _SNIPPET_CHARS = 300
 _FORGOTTEN = "[已遗忘]"
+_VECTOR_MIN_SIMILARITY = 0.3
+QueryEmbedding = tuple[str, Sequence[float]]
 # Frequent function words carry no topic signal for recall.
 _CJK_STOP_WORDS = frozenset({
     "什么", "怎么", "这个", "那个", "我们", "你们", "他们", "一下", "可以", "不是",
@@ -105,11 +112,14 @@ class SearchHit:
 
 
 class MemoryIndex:
-    def __init__(self, documents: MemoryDocuments, *, use_fts: bool | None = None) -> None:
+    def __init__(
+        self, documents: MemoryDocuments, *, use_fts: bool | None = None, clock: Clock = utc_now,
+    ) -> None:
         self.documents = documents
         self.db_path = documents.workspace / "memory/claims.sqlite3"
         self.want_fts = use_fts
         self.fts = False
+        self.clock = clock
         self._warnings: set[tuple[str, str, str]] = set()
 
     @contextmanager
@@ -119,9 +129,9 @@ class MemoryIndex:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version == 0:
+            if version in {0, 1}:
                 self._initialize(conn)
-            elif version != 1:
+            elif version != 2:
                 raise ValueError(f"不支持的记忆索引版本：{version}")
             self.fts = self.want_fts is not False and conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE name = 'memory_fts'",
@@ -130,12 +140,18 @@ class MemoryIndex:
                 yield conn
 
     def _initialize(self, conn: sqlite3.Connection) -> None:
-        # Version zero was a disposable cache with DB-only metadata. Do not
-        # invent those values for legacy Markdown when rebuilding the projection.
+        # Every version is a disposable projection. Rebuild old schemas from
+        # Markdown, without inventing metadata that a legacy line never carried.
         conn.executescript("""
             BEGIN IMMEDIATE;
+            DROP TABLE IF EXISTS vectors;
+            DROP TABLE IF EXISTS tombstones;
+            DROP TABLE IF EXISTS claim_events;
+            DROP TABLE IF EXISTS claim_links;
             DROP TABLE IF EXISTS claims;
             DROP TABLE IF EXISTS memory_fts;
+            DROP TABLE IF EXISTS chunks;
+            DROP TABLE IF EXISTS documents;
             DROP TABLE IF EXISTS memory_index;
             DROP TABLE IF EXISTS index_meta;
             CREATE TABLE documents (
@@ -170,6 +186,11 @@ class MemoryIndex:
             CREATE INDEX claims_status ON claims(status, expires_at);
             CREATE INDEX claims_person ON claims(person_id);
             CREATE INDEX claims_project ON claims(project_id);
+            CREATE TABLE vectors (
+                claim_id TEXT NOT NULL, content_hash TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                dim INTEGER NOT NULL, vec BLOB NOT NULL,
+                PRIMARY KEY(claim_id, content_hash, fingerprint)
+            );
             CREATE TABLE claim_links (
                 new_id TEXT NOT NULL, old_id TEXT NOT NULL,
                 relation TEXT NOT NULL CHECK(relation = 'supersedes'),
@@ -210,7 +231,7 @@ class MemoryIndex:
                         VALUES ('delete', old.id, old.text);
                     END;
                 """)
-        conn.execute("PRAGMA user_version = 1")
+        conn.execute("PRAGMA user_version = 2")
         conn.commit()
 
     @staticmethod
@@ -255,6 +276,7 @@ class MemoryIndex:
                 if full or content_hash != known.get(path):
                     changed[path] = content
             if not changed:
+                self._prune_vectors(conn)
                 return 0
             affected: set[str] = set()
             for path in changed:
@@ -376,7 +398,50 @@ class MemoryIndex:
                 )
             """)
             self._project_claims(conn, affected)
+            self._prune_vectors(conn)
             return len(changed)
+
+    def _prune_vectors(self, conn: sqlite3.Connection) -> None:
+        # No FK cascade: rebuilding one file temporarily replaces its claim rows,
+        # while unchanged claim text must retain its cached vector.
+        conn.execute("""
+            DELETE FROM vectors WHERE NOT EXISTS (
+                SELECT 1 FROM claims c WHERE c.claim_id=vectors.claim_id
+                  AND c.content_hash=vectors.content_hash AND c.status='active'
+                  AND (c.expires_at IS NULL OR c.expires_at>?)
+            )
+        """, (iso(self.clock()),))
+
+    def pending_vectors(self, fingerprint: str, limit: int) -> list[tuple[str, str, str]]:
+        with self.connect() as conn:
+            return [tuple(row) for row in conn.execute("""
+                SELECT c.claim_id, c.content_hash, c.text FROM claims c
+                WHERE c.status='active' AND (c.expires_at IS NULL OR c.expires_at>?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM vectors v WHERE v.claim_id=c.claim_id
+                      AND v.content_hash=c.content_hash AND v.fingerprint=?
+                  )
+                ORDER BY json_extract(c.metadata, '$.updated_at') DESC, c.claim_id LIMIT ?
+            """, (iso(self.clock()), fingerprint, limit))]
+
+    def save_vectors(
+        self, fingerprint: str, pending: Sequence[tuple[str, str, str]],
+        vectors: Sequence[array[float]],
+    ) -> int:
+        saved = 0
+        with self.connect() as conn:
+            for (claim_id, content_hash, _), vector in zip(pending, vectors):
+                # The API wait can overlap a forget, correction, or manual edit.
+                saved += conn.execute("""
+                    INSERT OR REPLACE INTO vectors
+                    SELECT claim_id, content_hash, ?, ?, ? FROM claims
+                    WHERE claim_id=? AND content_hash=? AND status='active'
+                      AND (expires_at IS NULL OR expires_at>?)
+                """, (
+                    fingerprint, len(vector), vector.tobytes(), claim_id, content_hash,
+                    iso(self.clock()),
+                )).rowcount
+        return saved
 
     def _project_claims(self, conn: sqlite3.Connection, affected: set[str]) -> None:
         occurrences: dict[str, list[Claim]] = {}
@@ -444,101 +509,191 @@ class MemoryIndex:
             claim.due_at, claim.expires_at, claim.metadata_json(), digest(claim.text),
         ))
 
+    @staticmethod
+    def _search_filter(
+        *, now: str, include_history: bool, scopes: Sequence[str],
+        active_projects_only: bool, person_ids: Sequence[str] | None,
+    ) -> tuple[str, list[object]]:
+        where = "ch.scope IN (" + ",".join("?" for _ in scopes) + ")"
+        params: list[object] = list(scopes)
+        if not include_history:
+            where += """
+                AND ch.current=1
+                AND COALESCE(c.expires_at, json_extract(ch.metadata, '$.expires_at'), ?) > ?
+            """
+            params.extend(("9999", now))
+        if active_projects_only:
+            where += """
+                AND (ch.scope!='projects' OR EXISTS (
+                    SELECT 1 FROM documents p WHERE p.path=ch.path
+                      AND json_extract(p.entity_json, '$.status')='active'
+                ))
+                AND NOT EXISTS (
+                    SELECT 1 FROM documents p
+                    WHERE (p.entity_id=json_extract(ch.metadata, '$.project_id')
+                           OR p.path=ch.path AND p.scope='projects')
+                      AND json_extract(p.entity_json, '$.status')!='active'
+                )
+            """
+        if person_ids is not None:
+            placeholders = ",".join("?" for _ in person_ids)
+            where += f"""
+                AND (json_extract(ch.metadata, '$.person_id') IS NULL
+                     OR json_extract(ch.metadata, '$.person_id') IN ({placeholders}))
+                AND (ch.scope!='people' OR ch.path IN (
+                    SELECT path FROM documents WHERE entity_id IN ({placeholders})
+                ))
+            """
+            params.extend(person_ids)
+            params.extend(person_ids)
+        return where, params
+
     def search(
         self, query: str, *, now: str, limit: int, min_score: float,
         exclude: Iterable[tuple[str, int]], include_history: bool,
         scopes: Sequence[str] = ("core", "bank", "projects", "people", "daily"),
         active_projects_only: bool = False, person_ids: Sequence[str] | None = None,
         exclude_texts: Iterable[str] = (), deduplicate: bool = False,
+        semantic: QueryEmbedding | None = None,
     ) -> list[SearchHit]:
         terms = query_terms(query)
-        if not terms:
+        if not terms and semantic is None:
             return []
+        where, filters = self._search_filter(
+            now=now, include_history=include_history, scopes=scopes,
+            active_projects_only=active_projects_only, person_ids=person_ids,
+        )
+        excluded = set(exclude)
+        excluded_texts = {text.casefold() for text in exclude_texts}
+        hits: list[SearchHit] = []
         with self.connect() as conn:
-            long_terms = [term for term in terms if len(term) >= 3] if self.fts else []
-            like_terms = [term for term in terms if term not in long_terms]
-            matches: list[str] = []
-            params: list[object] = []
-            if long_terms:
-                matches.append("ch.id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)")
-                expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in long_terms)
-                params.append(expression)
-            for term in like_terms:
-                matches.append("ch.text LIKE ? ESCAPE '\\'")
-                escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                params.append("%" + escaped + "%")
-            where = "(" + " OR ".join(matches) + ")"
-            where += " AND ch.scope IN (" + ",".join("?" for _ in scopes) + ")"
-            params.extend(scopes)
-            if not include_history:
-                where += """
-                    AND ch.current=1
-                    AND COALESCE(c.expires_at, json_extract(ch.metadata, '$.expires_at'), ?) > ?
-                """
-                params.append("9999")
-                params.append(now)
-            if active_projects_only:
-                where += """
-                    AND (ch.scope!='projects' OR EXISTS (
-                        SELECT 1 FROM documents p WHERE p.path=ch.path
-                          AND json_extract(p.entity_json, '$.status')='active'
-                    ))
-                    AND NOT EXISTS (
-                        SELECT 1 FROM documents p
-                        WHERE (p.entity_id=json_extract(ch.metadata, '$.project_id')
-                               OR p.path=ch.path AND p.scope='projects')
-                          AND json_extract(p.entity_json, '$.status')!='active'
+            if terms:
+                long_terms = [term for term in terms if len(term) >= 3] if self.fts else []
+                like_terms = [term for term in terms if term not in long_terms]
+                matches: list[str] = []
+                params: list[object] = []
+                if long_terms:
+                    matches.append(
+                        "ch.id IN (SELECT rowid FROM memory_fts WHERE memory_fts MATCH ?)"
                     )
-                """
-            if person_ids is not None:
-                placeholders = ",".join("?" for _ in person_ids)
-                where += f"""
-                    AND (json_extract(ch.metadata, '$.person_id') IS NULL
-                         OR json_extract(ch.metadata, '$.person_id') IN ({placeholders}))
-                    AND (ch.scope!='people' OR ch.path IN (
-                        SELECT path FROM documents WHERE entity_id IN ({placeholders})
+                    expression = " OR ".join('"' + term.replace('"', '""') + '"' for term in long_terms)
+                    params.append(expression)
+                for term in like_terms:
+                    matches.append("ch.text LIKE ? ESCAPE '\\'")
+                    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    params.append("%" + escaped + "%")
+                matched = " OR ".join(matches)
+                rows = conn.execute(f"""
+                    SELECT ch.*, c.claim_id AS selected_id, c.kind, c.expires_at,
+                           COALESCE(c.status, json_extract(ch.metadata, '$.status')) AS status,
+                           COALESCE(json_extract(ch.metadata, '$.person_id'),
+                               CASE WHEN d.scope='people' THEN d.entity_id END) AS person_id
+                    FROM chunks ch LEFT JOIN claims c
+                      ON c.claim_id=ch.claim_id AND c.path=ch.path AND c.line=ch.line_start
+                    JOIN documents d ON d.path=ch.path
+                    WHERE ({matched}) AND {where}
+                """, [*params, *filters])
+                for row in rows:
+                    if (row["path"], row["line_start"]) in excluded:
+                        continue
+                    if row["text"].casefold() in excluded_texts:
+                        continue
+                    score = _score(row["text"], terms)
+                    if score <= min_score:
+                        continue
+                    status = row["status"] or "active"
+                    if (
+                        status == "active" and row["expires_at"] is not None
+                        and row["expires_at"] <= now
+                    ):
+                        status = "expired"
+                    hits.append(SearchHit(
+                        row["path"], row["line_start"], row["text"][:_SNIPPET_CHARS],
+                        row["selected_id"], row["kind"], score, status, row["person_id"],
                     ))
-                """
-                params.extend(person_ids)
-                params.extend(person_ids)
-            rows = conn.execute(f"""
-                SELECT ch.*, c.claim_id AS selected_id, c.kind, c.expires_at,
-                       COALESCE(c.status, json_extract(ch.metadata, '$.status')) AS status,
-                       COALESCE(json_extract(ch.metadata, '$.person_id'),
-                           CASE WHEN d.scope='people' THEN d.entity_id END) AS person_id
-                FROM chunks ch LEFT JOIN claims c
-                  ON c.claim_id=ch.claim_id AND c.path=ch.path AND c.line=ch.line_start
-                JOIN documents d ON d.path=ch.path
-                WHERE {where}
-            """, params)
-            excluded = set(exclude)
-            excluded_texts = {text.casefold() for text in exclude_texts}
-            hits: list[SearchHit] = []
-            for row in rows:
-                if (row["path"], row["line_start"]) in excluded:
-                    continue
-                if row["text"].casefold() in excluded_texts:
-                    continue
-                score = _score(row["text"], terms)
-                if score <= min_score:
-                    continue
-                status = row["status"] or "active"
-                if (
-                    status == "active" and row["expires_at"] is not None
-                    and row["expires_at"] <= now
-                ):
-                    status = "expired"
-                hits.append(SearchHit(
-                    row["path"], row["line_start"], row["text"][:_SNIPPET_CHARS],
-                    row["selected_id"], row["kind"], score, status, row["person_id"],
-                ))
-        hits.sort(key=lambda hit: (
-            -hit.score, hit.claim_id is None,
-            hit.path.startswith("memory/daily"), hit.path, hit.line,
-        ))
+            hits.sort(key=lambda hit: (
+                -hit.score, hit.claim_id is None,
+                hit.path.startswith("memory/daily"), hit.path, hit.line,
+            ))
+            if deduplicate and semantic is not None:
+                lexical: dict[str, SearchHit] = {}
+                for hit in hits:
+                    lexical.setdefault(hit.text.casefold(), hit)
+                hits = list(lexical.values())
+            if semantic is not None:
+                candidate_limit = limit * 4
+                vectors = self._vector_hits(
+                    conn, semantic, now=now, where=where, params=filters,
+                    excluded=excluded, excluded_texts=excluded_texts,
+                    limit=candidate_limit, deduplicate=deduplicate,
+                )
+                hits = self._fuse(hits[:candidate_limit], vectors)
         if deduplicate:
             unique: dict[str, SearchHit] = {}
             for hit in hits:
                 unique.setdefault(hit.text.casefold(), hit)
             hits = list(unique.values())
         return hits[:limit]
+
+    @staticmethod
+    def _vector_hits(
+        conn: sqlite3.Connection, semantic: QueryEmbedding, *, now: str,
+        where: str, params: Sequence[object], excluded: set[tuple[str, int]],
+        excluded_texts: set[str], limit: int, deduplicate: bool,
+    ) -> list[SearchHit]:
+        fingerprint, query = semantic
+        rows = conn.execute(f"""
+            SELECT ch.path, ch.line_start, ch.text, c.claim_id, c.kind,
+                   COALESCE(c.person_id,
+                       CASE WHEN d.scope='people' THEN d.entity_id END) AS person_id,
+                   v.vec
+            FROM vectors v JOIN claims c
+              ON c.claim_id=v.claim_id AND c.content_hash=v.content_hash
+            JOIN chunks ch
+              ON ch.claim_id=c.claim_id AND ch.path=c.path AND ch.line_start=c.line
+            JOIN documents d ON d.path=ch.path
+            WHERE v.fingerprint=? AND v.dim=? AND c.status='active'
+              AND (c.expires_at IS NULL OR c.expires_at>?) AND {where}
+        """, [fingerprint, len(query), now, *params])
+        best: list[tuple[float, str, SearchHit]] = []
+        for row in rows:
+            if (row["path"], row["line_start"]) in excluded:
+                continue
+            text = row["text"]
+            if text.casefold() in excluded_texts:
+                continue
+            vector = array("f")
+            vector.frombytes(row["vec"])
+            score = sum(left * right for left, right in zip(query, vector))
+            if score < _VECTOR_MIN_SIMILARITY:
+                continue
+            hit = SearchHit(
+                row["path"], row["line_start"], text[:_SNIPPET_CHARS], row["claim_id"],
+                row["kind"], score, "active", row["person_id"],
+            )
+            candidate = (score, row["claim_id"], hit)
+            if deduplicate:
+                duplicate = next((item for item in best
+                                  if item[2].text.casefold() == hit.text.casefold()), None)
+                if duplicate is not None:
+                    if candidate[:2] <= duplicate[:2]:
+                        continue
+                    best.remove(duplicate)
+                    heapq.heapify(best)
+            if len(best) < limit:
+                heapq.heappush(best, candidate)
+            elif candidate[:2] > best[0][:2]:
+                heapq.heapreplace(best, candidate)
+        return [item[2] for item in sorted(best, reverse=True)]
+
+    @staticmethod
+    def _fuse(lexical: list[SearchHit], semantic: list[SearchHit]) -> list[SearchHit]:
+        scores: dict[str | tuple[str, int], float] = {}
+        hits: dict[str | tuple[str, int], SearchHit] = {}
+        for ranking in (lexical, semantic):
+            for rank, hit in enumerate(ranking, 1):
+                key = hit.claim_id or (hit.path, hit.line)
+                scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
+                hits.setdefault(key, hit)
+        return [replace(hits[key], score=scores[key])
+                for key in sorted(scores, key=lambda key: scores[key], reverse=True)]

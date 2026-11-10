@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -243,9 +245,13 @@ class MemorySearchTool(_MemoryClaimTool):
         query = query.strip()
         if not query:
             return ToolResult.error("搜索内容不能为空")
-        hits = self._claims.search(
+        semantic = await self._store.query_embedding(query)
+        search = partial(
+            self._claims.search,
             query, limit=8 if limit is None else limit, include_history=include_history,
+            semantic=semantic,
         )
+        hits = search() if semantic is None else await asyncio.to_thread(search)
         return _dump({
             "notice": _UNTRUSTED_NOTICE,
             "query": query,

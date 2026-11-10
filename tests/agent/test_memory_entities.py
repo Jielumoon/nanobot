@@ -107,7 +107,9 @@ def test_memory_project_slug_collisions_keep_distinct_ids(claims: ClaimStore) ->
 async def test_memory_people_require_enabled_config_and_evidence(
     tmp_path: Path, store: MemoryStore, claims: ClaimStore,
 ) -> None:
-    disabled = MemoryStore(tmp_path / "disabled", config=MemoryConfig(claims_enabled=True))
+    disabled = MemoryStore(tmp_path / "disabled", config=MemoryConfig(
+        claims_enabled=True, people=MemoryPeopleConfig(enabled=False),
+    ))
     result = await MemoryRememberTool(disabled).execute(
         text="小林负责设计", kind="fact", person="小林", quote="小林负责设计",
     )

@@ -35,7 +35,9 @@ from nanobot.agent.memory_documents import (
     utc_now,
 )
 from nanobot.agent.memory_dreams import DreamBatch, DreamNotes, DreamSource
-from nanobot.config.schema import MemoryConfig
+from nanobot.agent.memory_index import QueryEmbedding
+from nanobot.config.network import NetworkConfig
+from nanobot.config.schema import MemoryConfig, ProvidersConfig
 from nanobot.events import NO_EVENTS, CompactionReason, ContextCompactionEvent, EventSink
 from nanobot.llm_usage.context import llm_usage_source
 from nanobot.providers.base import LLMResponse, ProviderConversationState
@@ -64,6 +66,7 @@ from nanobot.utils.workspace_prompts import (
 )
 
 if TYPE_CHECKING:
+    from nanobot.agent.memory_embeddings import MemoryEmbeddings
     from nanobot.agent.tools.registry import ToolRegistry
     from nanobot.utils.llm_runtime import LLMRuntime
 
@@ -88,6 +91,8 @@ class MemoryStore:
         max_history_entries: int = _DEFAULT_MAX_HISTORY,
         *,
         config: MemoryConfig | None = None,
+        providers: ProvidersConfig | None = None,
+        network: NetworkConfig | None = None,
         timezone: str | None = None,
         clock: Clock = utc_now,
     ):
@@ -120,6 +125,15 @@ class MemoryStore:
             ClaimStore(workspace, timezone=self.timezone, clock=clock, lock=self._append_lock)
             if self.config.claims_enabled else None
         )
+        self.embeddings: MemoryEmbeddings | None = None
+        if self.claims is not None and self.config.embedding.enabled:
+            from nanobot.agent.memory_embeddings import MemoryEmbeddings
+
+            self.embeddings = MemoryEmbeddings(
+                self.claims, self.config.embedding,
+                providers if providers is not None else ProvidersConfig(),
+                network if network is not None else NetworkConfig(),
+            )
         self._git = GitStore(
             workspace,
             tracked_files=["SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor", "memory/ledger.md"],
@@ -767,6 +781,16 @@ class MemoryStore:
         if self.claims is not None:
             self.claims.expire_due(actor="dream", run_id=run_id)
             self.reconcile_files()
+
+    async def query_embedding(self, query: str) -> QueryEmbedding | None:
+        if self.embeddings is None or not query.strip():
+            return None
+        return await self.embeddings.query(query)
+
+    async def backfill_embeddings(self) -> int:
+        if self.embeddings is None:
+            return 0
+        return await self.embeddings.backfill()
 
     def finish_dream(
         self, *, run_id: str, status: str, cursor: int | None, prefix: str,

@@ -37,7 +37,9 @@ def _loaded_tools(memory: MemoryStore | None, tmp_path) -> set[str]:
 
 def test_memory_tools_load_only_when_claims_are_enabled(tmp_path):
     assert not _MEMORY_TOOLS & _loaded_tools(None, tmp_path)
-    assert not _MEMORY_TOOLS & _loaded_tools(MemoryStore(tmp_path), tmp_path)
+    disabled = MemoryStore(tmp_path, config=MemoryConfig(claims_enabled=False))
+    assert not _MEMORY_TOOLS & _loaded_tools(disabled, tmp_path)
+    assert _MEMORY_TOOLS <= _loaded_tools(MemoryStore(tmp_path), tmp_path)
     assert _MEMORY_TOOLS <= _loaded_tools(_store(tmp_path), tmp_path)
 
 
@@ -156,7 +158,9 @@ async def test_context_truncates_long_memory_and_injects_commitments_in_message(
 
 
 def test_context_ignores_injection_limit_without_claims(tmp_path):
-    builder = ContextBuilder(tmp_path, memory_config=MemoryConfig(inject_max_chars=200))
+    builder = ContextBuilder(
+        tmp_path, memory_config=MemoryConfig(claims_enabled=False, inject_max_chars=200),
+    )
     _long_memory(builder.memory)
 
     assert "PostgreSQL" in builder.build_system_prompt()
@@ -171,7 +175,8 @@ def test_context_strips_claim_markers_and_explains_memory_tools(tmp_path):
     assert "- 只喝手冲咖啡" in prompt
     assert "<!-- claim:" not in prompt
     assert "memory_remember" in prompt
-    assert "memory_remember" not in ContextBuilder(tmp_path).build_system_prompt()
+    disabled = ContextBuilder(tmp_path, memory_config=MemoryConfig(claims_enabled=False))
+    assert "memory_remember" not in disabled.build_system_prompt()
 
 
 async def test_recall_adds_matching_tail_entries_for_long_memory(tmp_path):
@@ -229,7 +234,7 @@ def test_dream_prompt_uses_redacted_history_without_forgotten_content(tmp_path):
 
 
 def test_dream_prompt_unchanged_when_structured_memory_is_off(tmp_path):
-    store = MemoryStore(tmp_path)
+    store = MemoryStore(tmp_path, config=MemoryConfig(claims_enabled=False, daily_notes=False))
     store.append_history("- [permanent] 只喝手冲咖啡")
 
     result = store.build_dream_prompt()

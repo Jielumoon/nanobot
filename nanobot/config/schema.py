@@ -91,25 +91,39 @@ class DreamConfig(Base):
 
 
 class MemoryPeopleConfig(Base):
+    """Evidence-backed people pages and recall for explicitly mentioned people."""
+
+    enabled: bool = True
+
+
+class MemoryEmbeddingConfig(Base):
+    """Optional claim vectors; batch_size is the per-Dream backfill budget."""
+
     enabled: bool = False
+    provider: str = Field(default="openai", min_length=1)
+    model: str = Field(default="text-embedding-3-small", min_length=1)
+    dimensions: int | None = Field(default=None, ge=1)
+    batch_size: int = Field(default=32, ge=1, le=256)
 
 
 class MemoryConfig(Base):
-    """Opt-in structured long-term memory on top of the Markdown memory files.
+    """Markdown-backed memory, daily summaries, and bounded current-turn recall.
 
-    Markdown files stay the source of truth. ``claimsEnabled`` adds a local
-    SQLite claim ledger and search index at ``memory/claims.sqlite3`` plus the
-    ``memory_remember``/``memory_search``/``memory_forget`` tools. Everything is
-    disabled by default so existing workspaces behave as before.
+    The ledger and Markdown own state; ``memory/claims.sqlite3`` is disposable.
+    Disable ``claimsEnabled`` to use legacy file-based memory, and ``dailyNotes``
+    to stop mirroring summaries. Reading existing files never rewrites them.
+    Embeddings are opt-in and require a configured provider; lexical search
+    needs no external service.
     """
 
-    claims_enabled: bool = False
-    daily_notes: bool = False
+    claims_enabled: bool = True
+    daily_notes: bool = True
     people: MemoryPeopleConfig = Field(default_factory=MemoryPeopleConfig)
+    embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     # Inject at most this many characters of MEMORY.md into the system prompt
     # and recall matching entries for the current message instead. 0 keeps the
     # full file. Only applies while claimsEnabled provides the search index.
-    inject_max_chars: int = Field(default=0, ge=0)
+    inject_max_chars: int = Field(default=6000, ge=0)
     recall_limit: int = Field(default=5, ge=1, le=20)
     commitment_limit: int = Field(default=5, ge=0, le=20)
 

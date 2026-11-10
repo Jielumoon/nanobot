@@ -548,6 +548,9 @@
       "fields": {
         "agents_defaults_timezone_mode": {"label": "システムの時間帯", "help": "オフにすると時間帯を指定できます。\n\nオフにすると手動でタイムゾーンを選択できます。"},
         "agents_defaults_timezone": {"label": "タイムゾーン", "help": "UTC オフセットは今日の日付に基づきます。\n\nタイムゾーンを選択します。UTC との時差は現在の日付に基づきます。"},
+        "agents_defaults_memory_claims_enabled": {"label": "構造化メモリ", "help": "メモリツールと分類別の保存を有効にします。無効にしても既存のファイルは保持されます。"},
+        "agents_defaults_memory_people_enabled": {"label": "人物メモリ", "help": "根拠のある情報を保存し、その人物への言及時に参照します。構造化メモリが必要です。"},
+        "agents_defaults_memory_embedding_enabled": {"label": "意味検索", "help": "設定済みの埋め込みサービスを使用します。API 料金が発生する場合があります。Dream がベクトルを分割生成し、サービス障害時もキーワード検索を利用できます。"},
         "agents_defaults_dream_enabled": {"label": "記憶の整理", "help": "メモリーを自動整理します。オフにしても既存のメモリーは使えます。\n\n会話の有用な情報を自動で整理します。オフにしても既存の記憶は使用できます。"},
         "gateway_heartbeat_enabled": {"label": "定期チェック", "help": "HEARTBEAT.md のタスクを定期的に確認します。"},
         "gateway_heartbeat_interval_s": {"label": "確認間隔", "help": "ハートビートの確認間隔（秒）です。\n\nゲートウェイの起動時に定期チェックを予約します。"},

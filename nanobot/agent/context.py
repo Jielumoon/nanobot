@@ -11,7 +11,8 @@ from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools import sessions as session_tools
 from nanobot.apps.cli import utils as cli_app_utils
-from nanobot.config.schema import MemoryConfig
+from nanobot.config.network import NetworkConfig
+from nanobot.config.schema import MemoryConfig, ProvidersConfig
 from nanobot.context_sources import record_source, system_source_scope
 from nanobot.runtime_context import (
     RUNTIME_CONTEXT_MESSAGE_META,
@@ -86,11 +87,16 @@ class ContextBuilder:
         disabled_skills: list[str] | None = None,
         *,
         memory_config: MemoryConfig | None = None,
+        providers: ProvidersConfig | None = None,
+        network: NetworkConfig | None = None,
         clock: Clock = utc_now,
     ):
         self.workspace = workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace, config=memory_config, timezone=timezone, clock=clock)
+        self.memory = MemoryStore(
+            workspace, config=memory_config, providers=providers, network=network,
+            timezone=timezone, clock=clock,
+        )
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
 
     def build_system_prompt(

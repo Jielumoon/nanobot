@@ -558,6 +558,18 @@
           "label": "Memory consolidation",
           "help": "Organize memory automatically; turning off keeps existing memories.\n\nAutomatically organize useful information from conversations. Turning this off keeps existing memories available."
         },
+        "agents_defaults_memory_claims_enabled": {
+          "label": "Structured memory",
+          "help": "Enable memory tools and categorized storage. Turning this off keeps existing files."
+        },
+        "agents_defaults_memory_people_enabled": {
+          "label": "People memory",
+          "help": "Save evidence-backed information and recall it when a person is mentioned. Requires structured memory."
+        },
+        "agents_defaults_memory_embedding_enabled": {
+          "label": "Semantic search",
+          "help": "Use the configured embedding provider; API charges may apply. Dream builds vectors in batches. Keyword search remains available if the service fails."
+        },
         "gateway_heartbeat_enabled": {
           "label": "Heartbeat",
           "help": "Check HEARTBEAT.md for tasks regularly.\n\nPeriodically check HEARTBEAT.md for tasks."

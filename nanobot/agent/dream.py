@@ -75,6 +75,7 @@ async def run_dream(
         finally:
             store.compact_history()
             await agent.sessions.state.prune_dream_sessions()
+            await store.backfill_embeddings()
             changed, sha = store.finish_dream(
                 run_id=run_id, status=status, cursor=cursor, prefix=prefix,
             )

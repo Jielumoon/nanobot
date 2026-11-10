@@ -2,7 +2,7 @@ import pytest
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.memory_dreams import DreamBatch
-from nanobot.config.schema import ModelPresetConfig
+from nanobot.config.schema import MemoryConfig, ModelPresetConfig
 from nanobot.providers.base import LLMResponse
 from nanobot.security.workspace_access import (
     bind_workspace_scope,
@@ -14,7 +14,7 @@ from nanobot.utils.prompt_templates import render_template
 
 @pytest.fixture
 def store(tmp_path):
-    s = MemoryStore(tmp_path)
+    s = MemoryStore(tmp_path, config=MemoryConfig(claims_enabled=False, daily_notes=False))
     s.write_soul("# Soul\n- Helpful")
     s.write_memory("# Memory\n- Project X active")
     return s

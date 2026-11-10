@@ -1478,7 +1478,9 @@ class TestCompactIdleSession:
             "new user",
             "new answer",
         ]
-        assert sent[-1]["content"] == _ARCHIVE_PROMPT
+        assert sent[-1]["content"] == render_template(
+            "agent/consolidator_archive.md", strip=True, claims_enabled=True,
+        )
 
     @pytest.mark.asyncio
     async def test_reuses_real_prefix_for_unified_session_workspace(

@@ -548,6 +548,9 @@
       "fields": {
         "agents_defaults_timezone_mode": {"label": "Zona waktu sistem", "help": "Nonaktifkan untuk memilih zona waktu.\n\nNonaktifkan untuk memilih zona waktu secara manual."},
         "agents_defaults_timezone": {"label": "Zona waktu", "help": "Selisih UTC mengikuti tanggal saat ini.\n\nPilih zona waktu. Selisih waktu dari UTC mengikuti tanggal saat ini."},
+        "agents_defaults_memory_claims_enabled": {"label": "Memori terstruktur", "help": "Aktifkan alat memori dan penyimpanan menurut kategori. Menonaktifkannya tetap menyimpan file yang ada."},
+        "agents_defaults_memory_people_enabled": {"label": "Memori orang", "help": "Simpan informasi berbukti dan panggil kembali saat orang tersebut disebut. Memerlukan memori terstruktur."},
+        "agents_defaults_memory_embedding_enabled": {"label": "Pencarian semantik", "help": "Gunakan penyedia vektor yang dikonfigurasi; biaya API mungkin berlaku. Dream membuat vektor secara bertahap. Pencarian kata kunci tetap tersedia jika layanan gagal."},
         "agents_defaults_dream_enabled": {"label": "Penataan memori", "help": "Atur memori otomatis; menonaktifkan tetap menyimpan memori yang ada.\n\nMenata informasi berguna dari percakapan secara otomatis. Memori yang ada tetap digunakan saat dinonaktifkan."},
         "gateway_heartbeat_enabled": {"label": "Pemeriksaan berkala", "help": "Periksa tugas di HEARTBEAT.md secara berkala.\n\nMemeriksa tugas di HEARTBEAT.md secara berkala."},
         "gateway_heartbeat_interval_s": {"label": "Interval pemeriksaan", "help": "Jeda pemeriksaan heartbeat dalam detik.\n\nGateway menjadwalkan pemeriksaan berkala saat dimulai."},

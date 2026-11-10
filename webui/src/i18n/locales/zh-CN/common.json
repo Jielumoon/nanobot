@@ -558,6 +558,18 @@
           "label": "记忆整理",
           "help": "自动整理记忆；关闭后仍可用已有记忆\n\n自动整理对话中的有用信息。关闭后停止整理，已有记忆仍可使用。"
         },
+        "agents_defaults_memory_claims_enabled": {
+          "label": "结构记忆",
+          "help": "启用记忆工具与分类存储；关闭后保留已有文件。"
+        },
+        "agents_defaults_memory_people_enabled": {
+          "label": "人物记忆",
+          "help": "只记录有证据的信息，提到该人物时召回；需开启结构记忆。"
+        },
+        "agents_defaults_memory_embedding_enabled": {
+          "label": "语义检索",
+          "help": "使用已配置的向量服务，可能产生 API 费用。Dream 分批生成向量，服务失败时仍可使用关键词检索。"
+        },
         "gateway_heartbeat_enabled": {
           "label": "心跳任务",
           "help": "定期检查 HEARTBEAT.md 任务\n\n定期检查 HEARTBEAT.md 中的任务。"

@@ -253,6 +253,42 @@ def test_disabling_memory_consolidation_preserves_other_memory_settings():
     assert after == before
 
 
+@pytest.mark.parametrize(("key", "default"), [
+    ("agents.defaults.memory.claims_enabled", True),
+    ("agents.defaults.memory.people.enabled", True),
+    ("agents.defaults.memory.embedding.enabled", False),
+])
+def test_memory_switch_roundtrip_changes_only_selected_setting(tmp_path, key, default):
+    path = tmp_path / "config.json"
+    config = Config()
+    save_config(config, path)
+    expected = runtime_config_payload(config)
+    assert expected[key] is default
+
+    for enabled in (not default, default):
+        payload = update_runtime_config_settings({key: enabled}, config_path=path)
+        expected[key] = enabled
+        assert payload["runtime_config"] == expected
+        assert payload["requires_restart"]
+        assert runtime_config_payload(load_config(path)) == expected
+
+
+@pytest.mark.parametrize("key", [
+    "agents.defaults.memory.claims_enabled",
+    "agents.defaults.memory.people.enabled",
+    "agents.defaults.memory.embedding.enabled",
+])
+def test_memory_switch_rejects_non_boolean_patch_atomically(tmp_path, key):
+    path = tmp_path / "config.json"
+    save_config(Config(), path)
+    before = path.read_bytes()
+    with pytest.raises(WebUISettingsError):
+        update_runtime_config_settings({
+            "agents.defaults.dream.enabled": False, key: "false",
+        }, config_path=path)
+    assert path.read_bytes() == before
+
+
 @pytest.mark.parametrize("backend", ["bwrap", "seatbelt"])
 def test_sandbox_backend_persists_with_path_permissions(tmp_path, backend):
     path = tmp_path / "config.json"

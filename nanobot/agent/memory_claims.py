@@ -36,7 +36,7 @@ from nanobot.agent.memory_documents import (
     utc_now,
 )
 from nanobot.agent.memory_entities import MemoryEntities
-from nanobot.agent.memory_index import MemoryIndex, SearchHit
+from nanobot.agent.memory_index import MemoryIndex, QueryEmbedding, SearchHit
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ class ClaimStore:
         self.clock = clock
         self.lock = lock
         self.documents = MemoryDocuments(workspace)
-        self.index = MemoryIndex(self.documents, use_fts=use_fts)
+        self.index = MemoryIndex(self.documents, use_fts=use_fts, clock=clock)
         self.entities = MemoryEntities(self.index)
         self.db_path = self.index.db_path
 
@@ -685,6 +685,7 @@ class ClaimStore:
         scopes: Sequence[str] = ("core", "bank", "projects", "people", "daily"),
         active_projects_only: bool = False, person_ids: Sequence[str] | None = None,
         exclude_texts: Iterable[str] = (), deduplicate: bool = False,
+        semantic: QueryEmbedding | None = None,
     ) -> list[SearchHit]:
         with self.lock:
             self.index.sync()
@@ -692,5 +693,5 @@ class ClaimStore:
                 query, now=iso(self.clock()), limit=limit, min_score=min_score,
                 exclude=exclude, include_history=include_history,
                 scopes=scopes, active_projects_only=active_projects_only, person_ids=person_ids,
-                exclude_texts=exclude_texts, deduplicate=deduplicate,
+                exclude_texts=exclude_texts, deduplicate=deduplicate, semantic=semantic,
             )
