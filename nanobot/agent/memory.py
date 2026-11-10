@@ -18,6 +18,15 @@ from uuid import uuid4
 
 from loguru import logger
 
+from nanobot.agent.memory_claims import (
+    ClaimStore,
+    DailyNotes,
+    ForgetResult,
+    local_day,
+    redact_terms,
+    strip_claim_markers,
+)
+from nanobot.config.schema import MemoryConfig
 from nanobot.events import NO_EVENTS, CompactionReason, ContextCompactionEvent, EventSink
 from nanobot.llm_usage.context import llm_usage_source
 from nanobot.providers.base import LLMResponse, ProviderConversationState
@@ -63,8 +72,15 @@ class MemoryStore:
         r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
     )
 
-    def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
+    def __init__(
+        self,
+        workspace: Path,
+        max_history_entries: int = _DEFAULT_MAX_HISTORY,
+        *,
+        config: MemoryConfig | None = None,
+    ):
         self.workspace = workspace
+        self.config = config or MemoryConfig()
         self.max_history_entries = max_history_entries
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
@@ -79,9 +95,17 @@ class MemoryStore:
         self._oversize_logged = False
         self._dream_prompt_oversize_logged = False
         self._append_lock = threading.Lock()
-        self._git = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor",
-        ])
+        self.daily: DailyNotes | None = (
+            DailyNotes(self.memory_dir) if self.config.daily_notes else None
+        )
+        self.claims: ClaimStore | None = (
+            ClaimStore(workspace, daily=self.daily) if self.config.claims_enabled else None
+        )
+        self._git = GitStore(
+            workspace,
+            tracked_files=["SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor"],
+            tracked_dirs=["memory/daily"] if self.daily is not None else None,
+        )
         self._maybe_migrate_legacy_history()
 
     @property
@@ -242,6 +266,112 @@ class MemoryStore:
         """Return long-term memory formatted for context injection."""
         long_term = self.read_memory()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
+
+    def memory_injection_limit(self) -> int | None:
+        """Character budget for MEMORY.md in the system prompt, or None for the full file.
+
+        Truncation needs the claim search index so the omitted tail stays reachable
+        through recall and ``memory_search``.
+        """
+        if self.claims is None or self.config.inject_max_chars <= 0:
+            return None
+        return self.config.inject_max_chars
+
+    def memory_head(self, memory: str) -> tuple[str, int] | None:
+        """Return ``(head, last_line)`` when MEMORY.md exceeds the injection budget."""
+        limit = self.memory_injection_limit()
+        clean = strip_claim_markers(memory)
+        if limit is None or len(clean) <= limit:
+            return None
+        kept: list[str] = []
+        used = 0
+        for line in clean.splitlines():
+            if kept and used + len(line) + 1 > limit:
+                break
+            kept.append(line[:limit] if not kept else line)
+            used += len(line) + 1
+        return "\n".join(kept).rstrip(), len(kept)
+
+    def prompt_memory(self, memory: str) -> str:
+        """MEMORY.md as injected into the system prompt."""
+        head = self.memory_head(memory)
+        if head is None:
+            return strip_claim_markers(memory)
+        text, last_line = head
+        total = len(strip_claim_markers(memory))
+        parts = [
+            text,
+            f"[MEMORY.md truncated: showing lines 1-{last_line} ({len(text)} of {total} characters). "
+            "Entries related to the current message are recalled in its runtime context; "
+            "use memory_search to look up anything else.]",
+        ]
+        if self.claims is not None:
+            commitments = self.claims.active_commitments(self.config.commitment_limit)
+            if commitments:
+                lines = ["## Active Commitments"]
+                for claim in commitments:
+                    due = f" (due {local_day(claim.expires_at)})" if claim.expires_at else ""
+                    lines.append(f"- {claim.text}{due}")
+                parts.append("\n".join(lines))
+        return "\n\n".join(parts)
+
+    def recall_exclusions(self) -> list[tuple[str, int]]:
+        """MEMORY.md lines already present in the truncated system-prompt head."""
+        head = self.memory_head(self.read_memory())
+        if head is None:
+            return []
+        return [("memory/MEMORY.md", line) for line in range(1, head[1] + 1)]
+
+    def append_daily_summary(self, summary: str, *, session_key: str | None = None) -> None:
+        """Mirror a compaction checkpoint into today's daily note when enabled."""
+        if self.daily is None:
+            return
+        try:
+            self.daily.append_summary(summary, session_key=session_key)
+        except OSError:
+            logger.exception("Failed to append compaction summary to the daily note")
+
+    def forget_memory(
+        self,
+        *,
+        claim_ids: list[str] | None = None,
+        query: str | None = None,
+        all_matches: bool = False,
+    ) -> tuple[ForgetResult, int]:
+        """Retract claims and matching entries, then redact them from history.jsonl.
+
+        Returns the result and the number of rewritten history entries. Saved chat
+        sessions are not modified.
+        """
+        if self.claims is None:
+            raise RuntimeError("memory claims are disabled")
+        result = self.claims.forget(
+            claim_ids=claim_ids or [],
+            query=query,
+            all_matches=all_matches,
+        )
+        redacted = self.redact_history(result.redact_terms) if result.changed else 0
+        return result, redacted
+
+    def redact_history(self, terms: list[str]) -> int:
+        """Replace forgotten phrases in every history.jsonl entry; return entries changed."""
+        usable = [term for term in terms if len(term.strip()) >= 2]
+        if not usable:
+            return 0
+        with self._append_lock:
+            entries = self._read_entries()
+            changed = 0
+            for entry in entries:
+                content = entry.get("content")
+                if not isinstance(content, str):
+                    continue
+                updated = redact_terms(content, usable)
+                if updated != content:
+                    entry["content"] = updated
+                    changed += 1
+            if changed:
+                self._write_entries(entries)
+        return changed
 
 
     def _normalize_history_entry(
@@ -511,6 +641,12 @@ class MemoryStore:
         The current contents of the durable memory files (SOUL.md, USER.md,
         memory/MEMORY.md) reach Dream through the normal agent system context.
         """
+        if self.claims is not None:
+            # Expiry is code-enforced on Dream's schedule rather than left to the model.
+            try:
+                self.claims.expire_due()
+            except Exception:
+                logger.exception("Failed to expire memory claims")
         last_cursor = self.get_last_dream_cursor()
         entries = self.read_unprocessed_history(since_cursor=last_cursor)
         if not entries:
@@ -522,7 +658,23 @@ class MemoryStore:
             for e in batch
         )
         template = self._dream_template()
-        prompt = f"{template}\n\n## Conversation History\n{history_text}"
+        sections = [template]
+        if self.claims is not None or self.daily is not None:
+            sections.append(render_template(
+                "agent/dream_claims.md",
+                strip=True,
+                claims_enabled=self.claims is not None,
+                daily_notes=self.daily is not None,
+            ))
+        if self.claims is not None:
+            retracted = self.claims.list_claims(status="retracted", limit=20)
+            if retracted:
+                sections.append(
+                    "## Forgotten Memories\n"
+                    "The user asked to forget these; do not save them or their paraphrases again:\n"
+                    + "\n".join(f"- {truncate_text(claim.text, 200)}" for claim in retracted)
+                )
+        prompt = "\n\n".join(sections) + f"\n\n## Conversation History\n{history_text}"
         return (prompt, batch[-1]["cursor"])
 
     def dream_content_diff(self) -> str:
@@ -533,7 +685,10 @@ class MemoryStore:
         """
         if not self._git.is_initialized():
             return ""
-        return self._git.summarize_working_tree(list(self._DREAM_CONTENT_PATHS))
+        paths: list[str] = list(self._DREAM_CONTENT_PATHS)
+        if self.daily is not None:
+            paths.extend(path for path in self._git.tracked_paths() if path.startswith("memory/daily/"))
+        return self._git.summarize_working_tree(paths)
 
     def build_dream_tools(self) -> ToolRegistry:
         """Build the restricted tool registry used by Dream runs."""
@@ -551,6 +706,10 @@ class MemoryStore:
 
         extra_read = [BUILTIN_SKILLS_DIR] if BUILTIN_SKILLS_DIR.exists() else None
         editable_files = [self.memory_file, self.soul_file, self.user_file]
+        editable_dirs: list[Path] = []
+        if self.daily is not None:
+            self.daily.dir.mkdir(parents=True, exist_ok=True)
+            editable_dirs.append(self.daily.dir)
 
         tools.register(ReadFileTool(
             workspace=workspace,
@@ -561,21 +720,34 @@ class MemoryStore:
         tools.register(EditFileTool(
             workspace=workspace,
             allowed_dir=skills_dir,
+            extra_write_allowed_dirs=editable_dirs,
             extra_write_allowed_files=editable_files,
             file_states=file_states,
         ))
         tools.register(ApplyPatchTool(
             workspace=workspace,
             allowed_dir=skills_dir,
+            extra_write_allowed_dirs=editable_dirs,
             extra_write_allowed_files=editable_files,
             file_states=file_states,
         ))
         tools.register(WriteFileTool(
             workspace=workspace,
             allowed_dir=skills_dir,
+            extra_write_allowed_dirs=editable_dirs,
             extra_write_allowed_files=editable_files,
             file_states=file_states,
         ))
+        if self.claims is not None:
+            from nanobot.agent.tools.memory_claims import (
+                MemoryForgetTool,
+                MemoryRememberTool,
+                MemorySearchTool,
+            )
+
+            tools.register(MemoryRememberTool(self))
+            tools.register(MemorySearchTool(self))
+            tools.register(MemoryForgetTool(self))
         return tools
 
     @staticmethod
@@ -815,6 +987,7 @@ class MemoryArchiver:
             "agent/consolidator_archive.md",
             strip=True,
             archive_count=len(source_messages),
+            claims_enabled=self.store.claims is not None,
         )
         prompt_message = {"role": "user", "content": prompt}
         provider_context = None
@@ -953,6 +1126,7 @@ class MemoryArchiver:
             return raw_fallback()
         if persist and summary != "(nothing)":
             self.store.append_history(summary, session_key=session_key)
+            self.store.append_daily_summary(summary, session_key=session_key)
         return summary
 
     async def archive_session(

@@ -17,6 +17,9 @@ Nanobot's agent workspace is at: {{ agent_workspace_path }}
 {% endif %}
 
 Only Dream memory-consolidation tasks may edit the profile and long-term memory files listed above.
+{% if memory_tools %}
+Exception: when the user explicitly asks you to remember, correct, or forget something, call `memory_remember` (with `supersedes` for a correction) or `memory_forget` in the same turn instead of editing files; confirm only what the tool result reports. Use `memory_search` to look up long-term memory that is not in this prompt.
+{% endif %}
 
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
 ## Format Hint

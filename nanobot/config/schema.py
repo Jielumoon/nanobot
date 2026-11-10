@@ -90,6 +90,25 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class MemoryConfig(Base):
+    """Opt-in structured long-term memory on top of the Markdown memory files.
+
+    Markdown files stay the source of truth. ``claimsEnabled`` adds a local
+    SQLite claim ledger and search index at ``memory/claims.sqlite3`` plus the
+    ``memory_remember``/``memory_search``/``memory_forget`` tools. Everything is
+    disabled by default so existing workspaces behave as before.
+    """
+
+    claims_enabled: bool = False
+    daily_notes: bool = False
+    # Inject at most this many characters of MEMORY.md into the system prompt
+    # and recall matching entries for the current message instead. 0 keeps the
+    # full file. Only applies while claimsEnabled provides the search index.
+    inject_max_chars: int = Field(default=0, ge=0)
+    recall_limit: int = Field(default=5, ge=1, le=20)
+    commitment_limit: int = Field(default=5, ge=0, le=20)
+
+
 class ProviderAPIConfig(Base):
     """Connection API defaults and custom endpoints' accepted request APIs."""
 
@@ -206,6 +225,7 @@ class AgentDefaults(Base):
         ge=0,
     )
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="before")
     @classmethod

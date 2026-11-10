@@ -1,0 +1,255 @@
+import json
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from nanobot.agent.context import ContextBuilder
+from nanobot.agent.memory import Consolidator, MemoryStore
+from nanobot.agent.tools.context import RequestContext, ToolContext, request_context
+from nanobot.agent.tools.loader import ToolLoader
+from nanobot.agent.tools.memory_claims import (
+    MemoryForgetTool,
+    MemoryRememberTool,
+    MemorySearchTool,
+)
+from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.config.schema import Config, MemoryConfig
+from nanobot.providers.base import GenerationSettings
+from nanobot.utils.llm_runtime import LLMRuntime
+
+_MEMORY_TOOLS = {"memory_remember", "memory_search", "memory_forget"}
+
+
+def _store(tmp_path, **config) -> MemoryStore:
+    return MemoryStore(tmp_path, config=MemoryConfig(claims_enabled=True, **config))
+
+
+def _loaded_tools(memory: MemoryStore | None, tmp_path) -> set[str]:
+    registry = ToolRegistry()
+    ctx = ToolContext(config=Config().tools, workspace=str(tmp_path), memory=memory)
+    ToolLoader().load(ctx, registry)
+    return set(registry.tool_names)
+
+
+def test_memory_tools_load_only_when_claims_are_enabled(tmp_path):
+    assert not _MEMORY_TOOLS & _loaded_tools(None, tmp_path)
+    assert not _MEMORY_TOOLS & _loaded_tools(MemoryStore(tmp_path), tmp_path)
+    assert _MEMORY_TOOLS <= _loaded_tools(_store(tmp_path), tmp_path)
+
+
+async def test_remember_tool_records_turn_provenance(tmp_path):
+    store = _store(tmp_path)
+    tool = MemoryRememberTool(store)
+    ctx = RequestContext(channel="cli", chat_id="direct", message_id="m-1", session_key="cli:direct")
+
+    with request_context(ctx):
+        result = json.loads(await tool.execute(text="只喝手冲咖啡", kind="preference", quote="我只喝手冲"))
+
+    assert result["status"] == "saved"
+    claim = store.claims.get(result["claim"]["claim_id"])
+    assert (claim.session_key, claim.message_id, claim.source_file) == ("cli:direct", "m-1", "USER.md")
+
+
+async def test_remember_tool_rejects_unknown_kind(tmp_path):
+    result = await MemoryRememberTool(_store(tmp_path)).execute(text="x", kind="mood")
+
+    assert result.is_error
+
+
+async def test_forget_tool_redacts_history_journal(tmp_path):
+    store = _store(tmp_path)
+    remembered = store.claims.remember("养了一只叫 Luna 的猫", "fact", quote="我家猫叫 Luna")
+    store.append_history("- [permanent] 养了一只叫 Luna 的猫 (user: \"我家猫叫 Luna\")")
+    store.append_history("- [durable] 部署在 1 核 1G 机器")
+
+    result = json.loads(
+        await MemoryForgetTool(store).execute(claim_ids=[remembered.claim.claim_id]),
+    )
+
+    assert result["status"] == "forgotten"
+    assert result["history_entries_redacted"] == 1
+    contents = [entry["content"] for entry in store.read_unprocessed_history(0)]
+    assert "Luna" not in contents[0] and "[已遗忘]" in contents[0]
+    assert contents[1] == "- [durable] 部署在 1 核 1G 机器"
+    assert "Luna" not in store.read_memory()
+
+
+async def test_forget_tool_reports_ambiguous_query(tmp_path):
+    store = _store(tmp_path)
+    store.claims.remember("喜欢手冲咖啡", "preference")
+    store.claims.remember("咖啡豆每月买一次", "fact")
+
+    result = json.loads(await MemoryForgetTool(store).execute(query="咖啡"))
+
+    assert result["status"] == "ambiguous"
+    assert len(result["candidates"]) == 2
+    assert "手冲咖啡" in store.read_user()
+
+
+async def test_search_tool_returns_sources_and_claim_ids(tmp_path):
+    store = _store(tmp_path)
+    remembered = store.claims.remember("住在上海", "fact")
+
+    result = json.loads(await MemorySearchTool(store).execute(query="上海"))
+
+    assert result["results"] == [{
+        "source": f"memory/MEMORY.md:{remembered.claim.source_line}",
+        "claim_id": remembered.claim.claim_id,
+        "kind": "fact",
+        "text": "住在上海",
+    }]
+
+
+def _long_memory(store: MemoryStore) -> None:
+    filler = "\n".join(f"- 项目笔记 {index}: 例行记录" for index in range(40))
+    store.write_memory(f"# Memory\n\n## 项目\n{filler}\n- 生产数据库是 PostgreSQL 16\n")
+
+
+def test_context_keeps_full_memory_below_injection_limit(tmp_path):
+    builder = ContextBuilder(
+        tmp_path,
+        memory_config=MemoryConfig(claims_enabled=True, inject_max_chars=10_000),
+    )
+    builder.memory.write_memory("# Memory\n\n- 生产数据库是 PostgreSQL 16\n")
+
+    prompt = builder.build_system_prompt()
+
+    assert "# Memory\n\n- 生产数据库是 PostgreSQL 16\n" in prompt
+    assert "MEMORY.md truncated" not in prompt
+
+
+def test_context_truncates_long_memory_and_lists_commitments(tmp_path):
+    builder = ContextBuilder(
+        tmp_path,
+        memory_config=MemoryConfig(claims_enabled=True, inject_max_chars=200),
+    )
+    _long_memory(builder.memory)
+    builder.memory.claims.remember("周五前提交周报", "commitment", expires_at="2099-01-01")
+
+    prompt = builder.build_system_prompt()
+
+    assert "项目笔记 0" in prompt
+    assert "PostgreSQL" not in prompt
+    assert "MEMORY.md truncated" in prompt
+    assert "## Active Commitments\n- 周五前提交周报 (due 2099-01-01)" in prompt
+    assert "<!-- claim:" not in prompt
+
+
+def test_context_ignores_injection_limit_without_claims(tmp_path):
+    builder = ContextBuilder(tmp_path, memory_config=MemoryConfig(inject_max_chars=200))
+    _long_memory(builder.memory)
+
+    assert "PostgreSQL" in builder.build_system_prompt()
+
+
+def test_context_strips_claim_markers_and_explains_memory_tools(tmp_path):
+    enabled = ContextBuilder(tmp_path, memory_config=MemoryConfig(claims_enabled=True))
+    enabled.memory.claims.remember("只喝手冲咖啡", "preference")
+
+    prompt = enabled.build_system_prompt()
+
+    assert "- 只喝手冲咖啡" in prompt
+    assert "<!-- claim:" not in prompt
+    assert "memory_remember" in prompt
+    assert "memory_remember" not in ContextBuilder(tmp_path).build_system_prompt()
+
+
+async def test_recall_adds_matching_tail_entries_for_long_memory(tmp_path):
+    store = _store(tmp_path, inject_max_chars=200)
+    _long_memory(store)
+    provider = MemorySearchTool(store).runtime_context_provider()
+    assert provider is not None
+
+    block = await provider(RequestContext(
+        channel="cli", chat_id="direct", original_user_text="我们的生产数据库用的什么版本 PostgreSQL？",
+    ))
+
+    assert block is not None and block.source == "memory_recall"
+    assert "PostgreSQL 16" in block.content
+    assert "项目笔记 0" not in block.content
+
+
+def test_recall_is_disabled_without_injection_limit(tmp_path):
+    assert MemorySearchTool(_store(tmp_path)).runtime_context_provider() is None
+
+
+def test_dream_gets_claim_tools_and_daily_write_access(tmp_path):
+    store = _store(tmp_path, daily_notes=True)
+
+    tools = store.build_dream_tools()
+
+    assert _MEMORY_TOOLS <= set(tools.tool_names)
+    write = tools.get("write_file")
+    assert write is not None
+    assert store.daily.dir in write._extra_write_allowed_dirs
+
+
+def test_dream_prompt_adds_claim_guidance_and_forgotten_items(tmp_path):
+    store = _store(tmp_path, daily_notes=True)
+    claim = store.claims.remember("养了一只猫", "fact")
+    store.claims.forget(claim_ids=[claim.claim.claim_id])
+    store.append_history("- [permanent] 只喝手冲咖啡")
+
+    result = store.build_dream_prompt()
+
+    assert result is not None
+    prompt = result[0]
+    assert "## Structured memory" in prompt
+    assert "memory/daily/YYYY-MM-DD.md" in prompt
+    assert "## Forgotten Memories" in prompt and "- 养了一只猫" in prompt
+    assert prompt.index("## Forgotten Memories") < prompt.index("## Conversation History")
+
+
+def test_dream_prompt_unchanged_when_structured_memory_is_off(tmp_path):
+    store = MemoryStore(tmp_path)
+    store.append_history("- [permanent] 只喝手冲咖啡")
+
+    result = store.build_dream_prompt()
+
+    assert result is not None
+    assert result[0] == (
+        f"{MemoryStore.default_dream_prompt()}\n\n## Conversation History\n"
+        f"[{store.read_unprocessed_history(0)[0]['timestamp']}] - [permanent] 只喝手冲咖啡"
+    )
+
+
+def test_dream_content_diff_includes_daily_notes(tmp_path):
+    store = MemoryStore(tmp_path, config=MemoryConfig(daily_notes=True))
+    store.git.init()
+
+    store.append_daily_summary("- [ephemeral] 正在实现记忆第一版", session_key="cli:direct")
+
+    assert "memory/daily/" in store.dream_content_diff()
+
+
+@pytest.mark.parametrize("daily_notes", [False, True])
+async def test_archive_summary_reaches_daily_note_only_when_enabled(tmp_path, daily_notes):
+    store = MemoryStore(tmp_path, config=MemoryConfig(daily_notes=daily_notes))
+    provider = MagicMock(aclose=AsyncMock())
+    provider.chat_stream_with_retry = AsyncMock(return_value=MagicMock(
+        content="- [ephemeral] 正在实现记忆第一版", finish_reason="stop",
+    ))
+    provider.generation = GenerationSettings(max_tokens=100)
+    runtime = LLMRuntime.capture(provider, "test-model", context_window_tokens=1000)
+    consolidator = Consolidator(
+        store=store,
+        sessions=MagicMock(),
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+    )
+    messages = [{"role": "user", "content": "继续"}, {"role": "assistant", "content": "好"}]
+
+    await consolidator.archiver.archive(
+        messages,
+        runtime=runtime,
+        session_key="cli:direct",
+        history=[{"role": "system", "content": "system"}, *messages],
+        request_tools=[],
+    )
+
+    note = tmp_path / "memory" / "daily"
+    if daily_notes:
+        (path,) = note.glob("*.md")
+        assert "- 正在实现记忆第一版" in path.read_text(encoding="utf-8")
+    else:
+        assert not note.exists()

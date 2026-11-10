@@ -59,7 +59,7 @@ from nanobot.command import CommandContext, CommandRouter
 from nanobot.command.builtin import register_core_commands
 from nanobot.command.router import CommandExpansion, command_text
 from nanobot.config.network import NetworkConfig
-from nanobot.config.schema import AgentDefaults, ModelPresetConfig
+from nanobot.config.schema import AgentDefaults, MemoryConfig, ModelPresetConfig
 from nanobot.events import NO_EVENTS, AgentEvent, EventSink
 from nanobot.llm_usage.context import source_from_request
 from nanobot.providers.base import LLMProvider, LLMUsage, ProviderConversationState
@@ -310,6 +310,7 @@ class AgentLoop:
         idle_compact_check_interval_seconds: int = 0,
         recovery_admission: RecoveryAdmission | None = None,
         builtin_assembly: Callable[[SessionManager, MessageBus, ToolRegistry, CommandRouter], ExecutionPolicy] | None = None,
+        memory_config: MemoryConfig | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -374,7 +375,12 @@ class AgentLoop:
         self._extra_hooks: list[AgentHook] = hooks or []
         self._hook_factories: list[AgentTurnHookFactory] = hook_factories or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            disabled_skills=disabled_skills,
+            memory_config=memory_config,
+        )
         self.sessions = session_manager or SessionManager(workspace)
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
@@ -520,6 +526,7 @@ class AgentLoop:
             model_presets=preset_helpers.configured_model_presets(config),
             model_preset=defaults.model_preset,
             dream_model_preset=defaults.dream.model_override,
+            memory_config=defaults.memory,
             restart_mode=config.gateway.restart_mode,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
@@ -665,6 +672,7 @@ class AgentLoop:
             timezone=self.context.timezone or "UTC",
             workspace_sandbox=self.workspace_scopes.sandbox_status,
             runtime_control=runtime_control,
+            memory=self.context.memory,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)

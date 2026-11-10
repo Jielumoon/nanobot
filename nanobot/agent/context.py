@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 from nanobot.agent.memory import MemoryStore
+from nanobot.agent.memory_claims import strip_claim_markers
 from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools import sessions as session_tools
 from nanobot.apps.cli import utils as cli_app_utils
+from nanobot.config.schema import MemoryConfig
 from nanobot.context_sources import record_source, system_source_scope
 from nanobot.runtime_context import (
     RUNTIME_CONTEXT_MESSAGE_META,
@@ -77,10 +79,17 @@ class ContextBuilder:
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
     _SKIPPABLE_DEFAULTS = {"AGENTS.md", "USER.md"}
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        timezone: str | None = None,
+        disabled_skills: list[str] | None = None,
+        *,
+        memory_config: MemoryConfig | None = None,
+    ):
         self.workspace = workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace)
+        self.memory = MemoryStore(workspace, config=memory_config)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
 
     def build_system_prompt(
@@ -112,8 +121,9 @@ class ContextBuilder:
         if include_memory:
             memory = self.memory.read_memory()
             if memory and not self._is_template_content(memory, "memory/MEMORY.md"):
-                parts.append(memory)
-                record_source(self.memory.memory_file, memory)
+                prompt_memory = self.memory.prompt_memory(memory)
+                parts.append(prompt_memory)
+                record_source(self.memory.memory_file, prompt_memory)
             elif self.memory.memory_file.is_file():
                 record_source(self.memory.memory_file, "", loaded=False)
 
@@ -155,6 +165,7 @@ class ContextBuilder:
             runtime=runtime,
             platform_policy=render_template("agent/platform_policy.md", system=system),
             channel=channel or "",
+            memory_tools=self.memory.claims is not None,
         )
 
     @staticmethod
@@ -206,6 +217,8 @@ class ContextBuilder:
                 ):
                     record_source(file_path, "", loaded=False)
                     continue
+                if filename != "AGENTS.md":
+                    content = strip_claim_markers(content)
                 parts.append(f"## {filename}\n\n{content}")
                 record_source(file_path, content)
 
