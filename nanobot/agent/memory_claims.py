@@ -341,10 +341,12 @@ class ClaimStore:
                 if line.path in entity_paths and claim is None and not HEADING_RE.match(line.text):
                     matches.append(line)
                     terms.add(line_text(line.text))
-            history_matches = [
-                LineMatch("memory/history.jsonl", cursor, line)
+            history_lines = [
+                (LineMatch("memory/history.jsonl", cursor, line), f"{cursor}:{digest(line)}")
                 for cursor, content in history_entries for line in content.splitlines()
-                if needle and needle in line.casefold()
+            ]
+            history_matches = [
+                line for line, _ in history_lines if needle and needle in line.text.casefold()
             ]
             candidates = [
                 LineMatch(line.path, line.line, f"[{claim.claim_id}] {claim.text}")
@@ -360,7 +362,7 @@ class ClaimStore:
                 )
             if needle and not all_matches and not ids and len(candidates) > 1:
                 return ForgetResult(candidates=candidates)
-            # Resolve the complete claim/quote closure before producing any file edits.
+            # Resolve the claim/quote/history closure before producing any file edits.
             # Each pass expands IDs, evidence or terms; stop at their fixed point.
             ids.update(targets)
             sources = {
@@ -370,21 +372,24 @@ class ClaimStore:
             while True:
                 before = (len(ids), len(terms), len(sources))
                 folded = [term.casefold() for term in terms]
+                sources.update(
+                    source for line, source in history_lines
+                    if any(term in line.text.casefold() for term in folded)
+                )
                 discovered: set[str] = set()
                 for line, claim, markers in lines:
                     haystack = line_text(line.text)
+                    line_sources = set(HISTORY_REF_RE.findall(line.text))
                     if claim is not None:
                         haystack += "\n" + (claim.quote or "")
-                    by_source = claim is not None and bool(
-                        sources.intersection(claim.evidence.history_lines)
-                    )
-                    if by_source or markers & ids or any(
+                        line_sources.update(claim.evidence.history_lines)
+                    if line_sources & sources or markers & ids or any(
                         term in haystack.casefold() for term in folded
                     ):
                         discovered.update(markers - ids)
+                        sources.update(line_sources)
                         if claim is not None:
                             targets.setdefault(claim.claim_id, claim)
-                            sources.update(claim.evidence.history_lines)
                             terms.add(claim.text)
                             if claim.quote:
                                 terms.add(claim.quote)
@@ -433,18 +438,7 @@ class ClaimStore:
                         tombstone("chunk", digest(text), f"{line.path}:{line.line}")
                     if claim is None:
                         removed.append(LineMatch(line.path, line.line, line.text.strip()))
-            history_ids: list[int] = []
-            for cursor, content in history_entries:
-                matched = False
-                for line in content.splitlines():
-                    target = f"{cursor}:{digest(line)}"
-                    if target in sources:
-                        matched = True
-                    elif any(term in line.casefold() for term in folded):
-                        tombstone("history", target, f"history:{target}")
-                        matched = True
-                if matched:
-                    history_ids.append(cursor)
+            history_ids = sorted({line.line for line, source in history_lines if source in sources})
             # A failed cleanup still leaves a durable recall barrier.
             self.documents.append_events(events)
             changes: dict[str, str] = {}

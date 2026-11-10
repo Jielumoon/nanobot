@@ -62,6 +62,36 @@ async def test_forget_claim_revokes_paraphrased_history_evidence_and_restored_mi
     assert fresh["status"] == "saved" and fresh["claim"]["claim_id"] != saved["claim_id"]
 
 
+@pytest.mark.parametrize("source", ["history", "daily"])
+async def test_forget_summary_text_retracts_derived_claim_closure(builder, source):
+    store = builder.memory
+    summary = "- 用户常住沪上\n- 用户养了金鱼"
+    cursor = store.append_history(summary)
+    store.append_history("- 常住上海")
+    batch = store.build_dream_prompt()
+    tools = store.build_dream_tools(batch)
+    saved = [json.loads(await tools.execute("memory_remember", arguments))["claim"] for arguments in (
+        {"text": "常住上海", "kind": "fact", "source": f"h:{cursor}:1"},
+        {"text": "住所位于黄浦江畔", "kind": "fact", "source": "h:2:1"},
+    )]
+    query = "沪上"
+    if source == "daily":
+        store.append_daily_summary(summary, cursor=cursor)
+        daily = store.daily.path_for()
+        # A user-edited mirror retains its original history provenance.
+        daily.write_text(daily.read_text().replace("沪上", "申城"))
+        query = "申城"
+
+    result = json.loads(await MemoryForgetTool(store).execute(query=query, all_matches=True))
+
+    assert result["status"] == "forgotten"
+    assert {store.claims.get(claim["claim_id"]).status for claim in saved} == {"retracted"}
+    assert not store.claims.search("上海", include_history=True)
+    assert not store.claims.search("黄浦江", include_history=True)
+    assert "沪上" not in store.history_file.read_text()
+    assert "用户养了金鱼" in store.history_file.read_text()
+
+
 async def test_forget_response_does_not_echo_removed_copy_into_current_chat(builder):
     store = builder.memory
     saved = store.claims.remember(ClaimDraft(text="门禁口令是蓝鲸松林", kind="fact")).claim

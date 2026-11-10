@@ -124,7 +124,7 @@ class AgentRunSpec:
     provider_state: ProviderConversationState | None = None
     context_generation: str | None = None
     refresh_context: Callable[
-        [list[dict[str, Any]], list[dict[str, Any]], str | None], str | None,
+        [Iterable[list[dict[str, Any]]], str | None], str | None,
     ] | None = None
     llm_usage_source: LLMUsageSource | None = None
     events: EventSink = NO_EVENTS
@@ -459,14 +459,6 @@ class AgentRunner:
             if drained_before_request:
                 had_injections = True
             await end_length_segment(interrupted=drained_before_request)
-            if spec.refresh_context is not None:
-                generation = await self.prepare_prompt(
-                    spec.refresh_context, messages, compaction.accepted_messages,
-                    compaction.active_summary,
-                )
-                if generation is not None:
-                    conversation_state.replace_transcript(messages)
-                    conversation_state.context_generation = generation
             context = AgentHookContext(
                 iteration=iteration,
                 messages=messages,
@@ -909,6 +901,16 @@ class AgentRunner:
         request_state: ModelRequestState,
         transcript: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if spec.refresh_context is not None:
+            compaction = request_state.compaction
+            generation = await self.prepare_prompt(
+                spec.refresh_context,
+                (compaction.raw_messages, compaction.accepted_messages, messages),
+                compaction.active_summary,
+            )
+            if generation is not None:
+                request_state.conversation.replace_transcript(compaction.raw_messages)
+                request_state.conversation.context_generation = generation
         messages, provider_context = await self.context_governor.prepare_request(
             request_state,
             messages,

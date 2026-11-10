@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,7 +25,7 @@ class MemoryContextRefresh:
         self.include_memory = include_memory
 
     def __call__(
-        self, messages: list[dict[str, Any]], accepted: list[dict[str, Any]], summary: str | None,
+        self, transcripts: Iterable[list[dict[str, Any]]], summary: str | None,
     ) -> str | None:
         if self.builder.memory.generation() == self.generation:
             return None
@@ -35,7 +36,7 @@ class MemoryContextRefresh:
             session_summary={"text": summary, "last_active": datetime.now().astimezone().isoformat()}
             if summary is not None else None,
         )
-        for transcript in (messages, accepted):
+        for transcript in transcripts:
             transcript[:] = [replay_model_memory(message) for message in transcript]
             transcript[0] = {"role": "system", "content": system}
         self.generation = view.generation

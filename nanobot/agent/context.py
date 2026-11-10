@@ -314,7 +314,9 @@ class ContextBuilder:
         """Build a model transcript while preserving the fresh-turn boundary."""
         root = workspace or self.workspace
         memory_view = transcript.memory_view
-        if memory_view is None and self.memory.claims is not None:
+        if self.memory.claims is not None and (
+            memory_view is None or memory_view.generation != self.memory.generation()
+        ):
             query = transcript.current_message if transcript.current_role == "user" else None
             memory_view = self.memory.prompt_view(query if include_memory else None)
         with self.skills.snapshot():
