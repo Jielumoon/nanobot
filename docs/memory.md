@@ -70,7 +70,9 @@ workspace/
     ├── MEMORY.md        # Project facts, decisions, and durable context
     ├── history.jsonl    # History summaries with bounded retention after Dream
     ├── .cursor          # Consolidator write cursor
-    └── .dream_cursor    # Dream consumption cursor
+    ├── .dream_cursor    # Dream consumption cursor
+    ├── claims.sqlite3   # Optional claim ledger and search index (structured memory)
+    └── daily/           # Optional daily notes, one YYYY-MM-DD.md per day
 ```
 
 A selected project may provide its own `AGENTS.md`, but project-local `SOUL.md`, `USER.md`, and `memory/` do not replace the agent-owned files above. This keeps one agent's profile and memory continuous while it works across projects. Use a [separate configured agent workspace](multiple-instances.md) when identity or memory must be isolated. A new chat, SDK `session_key`, or selected project does not create separate long-term memory.
@@ -221,6 +223,65 @@ In practical terms:
 - `intervalH` is the normal way to configure Dream frequency. Internally it runs as an `every` schedule.
 - `cron` overrides `intervalH` when set, allowing precise cron expressions (e.g. `0 */4 * * *`).
 - `modelOverride` selects a named entry from `model_presets` for Dream. It accepts preset names only; raw model identifiers are not supported. If omitted, Dream uses the main agent's selected runtime.
+
+## Structured Memory
+
+Structured memory is an opt-in layer for remembering preferences, facts, commitments, and work progress across sessions. It follows a file-first design: the Markdown files above stay the source of truth that you can read, edit, and restore with `/dream-restore`, while a single SQLite file stores claim metadata and a search index. It uses Python's built-in `sqlite3`, adds no dependencies, runs no local model or background service, and suits small machines such as a 1 CPU / 1 GB server.
+
+Enable it under `agents.defaults.memory` and restart the gateway:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memory": {
+        "claimsEnabled": true,
+        "dailyNotes": true,
+        "injectMaxChars": 6000
+      }
+    }
+  }
+}
+```
+
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `claimsEnabled` | `false` | Keep a claim ledger in `memory/claims.sqlite3` and give the agent the `memory_remember`, `memory_search`, and `memory_forget` tools |
+| `dailyNotes` | `false` | Append each compaction summary to `memory/daily/YYYY-MM-DD.md` and let Dream write today's note; daily notes are versioned with the other memory files |
+| `injectMaxChars` | `0` | When `memory/MEMORY.md` is longer than this many characters, the system prompt carries only its first lines plus active commitments, and entries related to the current message are recalled automatically; `0` always injects the whole file. Requires `claimsEnabled` |
+| `recallLimit` | `5` | Maximum recalled entries added to a message when `MEMORY.md` is truncated |
+| `commitmentLimit` | `5` | Maximum active commitments listed in the system prompt when `MEMORY.md` is truncated |
+
+With every field at its default, memory behaves exactly as described above.
+
+### Claims
+
+A claim is one atomic memory with a kind, a status, a confidence, the user's original words when available, the session and message it came from, and an optional expiry. Each active claim is also one bullet in a Markdown file, tagged with a hidden `<!-- claim:c_… -->` marker that is stripped before the file reaches the model:
+
+| Kind | Written to |
+|------|-----------|
+| `preference` | `USER.md`, section `## 已记住的偏好` |
+| `fact` | `memory/MEMORY.md`, section `## 已记住的事实` |
+| `commitment` | `memory/MEMORY.md`, section `## 承诺与待办` |
+| `progress` | today's daily note, or `memory/MEMORY.md` section `## 工作进度` when daily notes are off |
+
+A new claim can supersede older ones: the old claims are marked `superseded` and their bullets are removed, so the files never hold two conflicting versions. Claims with an expiry are retired by code when Dream runs or a memory is remembered or forgotten, and expired claims never appear in search results; the bullet is removed and, with daily notes on, archived in today's note. Statuses are `active`, `superseded`, `retracted`, and `expired`.
+
+The files win every disagreement. Deleting a marked bullet by hand retracts its claim, restoring it with `/dream-restore` reactivates it, and deleting `claims.sqlite3` is safe: it is rebuilt from the markers, without the original quotes and confidences.
+
+### Remembering and forgetting in chat
+
+When structured memory is enabled, the agent may change memory during a normal conversation only when you ask it to remember, correct, or forget something:
+
+- "Remember that I only drink pour-over coffee" saves a `preference` claim right away.
+- A correction saves the new claim and supersedes the old one.
+- "Forget my coffee preference" retracts matching claims, removes matching lines from `USER.md`, `memory/MEMORY.md`, and daily notes, and replaces the text in `memory/history.jsonl` with `[已遗忘]` so Dream does not learn it again. When several entries match, the agent lists them and asks which to forget. Saved chat sessions are not changed; delete a chat separately if needed.
+
+`memory_search` searches `USER.md`, `memory/MEMORY.md`, and daily notes and returns `file:line` sources and claim IDs. It uses SQLite FTS5 with the trigram tokenizer when available, so Chinese text matches without a word segmenter, and falls back to plain `LIKE` matching otherwise.
+
+### Background extraction
+
+No extra scheduled model calls are added. With claims enabled, compaction summaries keep short user quotes for preferences and commitments, and Dream records durable items through `memory_remember` with a kind, quote, confidence, expiry, and supersede links instead of editing them in by hand. Dream also receives a list of recently forgotten memories so it does not restore them.
 
 ## In Practice
 
