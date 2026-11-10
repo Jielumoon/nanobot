@@ -90,6 +90,10 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class MemoryPeopleConfig(Base):
+    enabled: bool = False
+
+
 class MemoryConfig(Base):
     """Opt-in structured long-term memory on top of the Markdown memory files.
 
@@ -101,6 +105,7 @@ class MemoryConfig(Base):
 
     claims_enabled: bool = False
     daily_notes: bool = False
+    people: MemoryPeopleConfig = Field(default_factory=MemoryPeopleConfig)
     # Inject at most this many characters of MEMORY.md into the system prompt
     # and recall matching entries for the current message instead. 0 keeps the
     # full file. Only applies while claimsEnabled provides the search index.

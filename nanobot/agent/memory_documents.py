@@ -21,12 +21,15 @@ ClaimKind = Literal[
     "preference", "fact", "commitment", "progress", "experience", "circumstance", "decision",
 ]
 ClaimStatus = Literal["active", "superseded", "retracted", "expired"]
+EntityKind = Literal["person", "project"]
+EntityStatus = Literal["active", "completed", "paused"]
 CLAIM_KINDS: tuple[ClaimKind, ...] = get_args(ClaimKind)
 Clock = Callable[[], datetime]
 MARKER_RE = re.compile(r"[ \t]*<!--\s*claim:(c_[0-9a-f]{12})(?:\s+(\{.*?\}))?\s*-->")
 CLAIM_REF_RE = re.compile(r"<!--\s*claim:(c_[0-9a-f]{12})(?=\s|-->|$)")
 CLAIM_COMMENT_RE = re.compile(r"[ \t]*<!--\s*claim:.*?(?:-->|$)", re.MULTILINE)
 ENTITY_RE = re.compile(r"<!--\s*entity:(\S+)\s+(\{.*?\})\s*-->")
+ENTITY_COMMENT_RE = re.compile(r"[ \t]*<!--\s*entity:.*?(?:-->|$)", re.MULTILINE)
 BULLET_RE = re.compile(r"^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?")
 SECTIONS: dict[ClaimKind, str] = {
     "preference": "## 已记住的偏好", "fact": "## 已记住的事实",
@@ -69,7 +72,7 @@ def digest(text: str) -> str:
 
 
 def strip_claim_markers(text: str) -> str:
-    return ENTITY_RE.sub("", CLAIM_COMMENT_RE.sub("", text))
+    return ENTITY_COMMENT_RE.sub("", CLAIM_COMMENT_RE.sub("", text))
 
 
 def marked_claim_ids(line: str) -> set[str]:
@@ -142,6 +145,19 @@ class ClaimDraft(BaseModel):
     supersedes: tuple[str, ...] = ()
     person_id: str | None = None
     project_id: str | None = None
+    person: str | None = None
+    project: str | None = None
+    aliases: tuple[str, ...] = ()
+
+    @field_validator("person", "project")
+    @classmethod
+    def entity_name(cls, value: str | None) -> str | None:
+        return normalize_entity_name(value) if value is not None else None
+
+    @field_validator("aliases")
+    @classmethod
+    def entity_aliases(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(normalize_entity_name(value) for value in values))
 
     @field_validator("text", "quote")
     @classmethod
@@ -249,14 +265,38 @@ def decode_claim(
     return Claim.model_construct(**data)
 
 
+def normalize_entity_name(value: str) -> str:
+    value = value.strip()
+    if not value or len(value) > 100 or any(char in value for char in "\r\n<>"):
+        raise ValueError("人物或项目名称须为 1–100 字，不能包含换行或尖括号")
+    return value
+
+
 class Entity(BaseModel):
     model_config = ConfigDict(extra="allow", frozen=True)
     v: Literal[1] = 1
     entity_id: str = Field(default_factory=lambda: f"e_{uuid4().hex[:12]}")
-    kind: Literal["person", "project"]
+    kind: EntityKind
     display_name: str
     aliases: tuple[str, ...] = ()
-    status: Literal["active", "completed", "paused"] = "active"
+    status: EntityStatus = "active"
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def name(cls, value: str) -> str:
+        return normalize_entity_name(value)
+
+    @field_validator("aliases")
+    @classmethod
+    def names(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(normalize_entity_name(value) for value in values))
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def timestamp(cls, value: str | None, info: ValidationInfo) -> str | None:
+        return parse_time(value, "UTC", str(info.field_name))
 
 
 def encode_entity(entity: Entity) -> str:
@@ -265,23 +305,30 @@ def encode_entity(entity: Entity) -> str:
     return f"<!-- entity:{entity.entity_id} {data} -->"
 
 
-def decode_entity(text: str) -> Entity | None:
+def decode_entity(text: str, *, issues: set[str]) -> Entity | None:
     matches = list(ENTITY_RE.finditer(text))
     if not matches:
+        if "<!--" in text and "entity:" in text:
+            issues.add("实体标记格式无效")
         return None
     if len(matches) != 1:
-        raise ValueError("人物或项目页只能有一个实体标记")
-    data = json.loads(matches[0].group(2))
-    return Entity.model_validate({**data, "entity_id": matches[0].group(1)})
+        issues.add("实体标记重复")
+        return None
+    try:
+        data = json.loads(matches[0].group(2))
+        return Entity.model_validate({**data, "entity_id": matches[0].group(1)})
+    except ValueError:
+        issues.add("实体元数据无效")
+        return None
 
 
 class LedgerEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
     v: Literal[1] = 1
     event_id: str = Field(default_factory=lambda: f"ev_{uuid4().hex[:12]}")
-    target_type: Literal["claim", "chunk", "history"]
+    target_type: Literal["claim", "chunk", "history", "entity"]
     target_id: str
-    action: Literal["remember", "supersede", "expire", "forget"]
+    action: Literal["remember", "supersede", "expire", "forget", "update"]
     actor: str
     at: str
     run_id: str | None = None

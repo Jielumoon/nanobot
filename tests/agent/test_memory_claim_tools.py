@@ -18,7 +18,9 @@ from nanobot.config.schema import Config, MemoryConfig
 from nanobot.providers.base import GenerationSettings
 from nanobot.utils.llm_runtime import LLMRuntime
 
-_MEMORY_TOOLS = {"memory_remember", "memory_search", "memory_forget"}
+_MEMORY_TOOLS = {
+    "memory_remember", "memory_search", "memory_forget", "memory_project", "memory_explain",
+}
 
 
 def _store(tmp_path, **config) -> MemoryStore:
@@ -128,7 +130,7 @@ def test_context_keeps_full_memory_below_injection_limit(tmp_path):
     assert "MEMORY.md truncated" not in prompt
 
 
-def test_context_truncates_long_memory_and_lists_commitments(tmp_path):
+async def test_context_truncates_long_memory_and_injects_commitments_in_message(tmp_path):
     builder = ContextBuilder(
         tmp_path,
         memory_config=MemoryConfig(claims_enabled=True, inject_max_chars=200),
@@ -143,7 +145,12 @@ def test_context_truncates_long_memory_and_lists_commitments(tmp_path):
     assert "项目笔记 0" in prompt
     assert "PostgreSQL" not in prompt
     assert "MEMORY.md truncated" in prompt
-    assert "## Active Commitments\n- 周五前提交周报 (due 2099-01-01)" in prompt
+    block = await MemorySearchTool(builder.memory).runtime_context_provider()(
+        RequestContext(channel="cli", chat_id="direct"),
+    )
+    assert block is not None
+    assert "周五前提交周报 (due 2099-01-01)" in block.content
+    assert "周五前提交周报" not in prompt
     assert "<!-- claim:" not in prompt
 
 
@@ -181,8 +188,14 @@ async def test_recall_adds_matching_tail_entries_for_long_memory(tmp_path):
     assert "项目笔记 0" not in block.content
 
 
-def test_recall_is_disabled_without_injection_limit(tmp_path):
-    assert MemorySearchTool(_store(tmp_path)).runtime_context_provider() is None
+async def test_recall_searches_bank_with_short_memory_and_no_injection_limit(tmp_path):
+    store = _store(tmp_path)
+    store.write_memory("# Memory\n- 住在北京\n")
+    store.claims.remember(ClaimDraft(text="只喝手冲咖啡", kind="preference"))
+    block = await MemorySearchTool(store).runtime_context_provider()(
+        RequestContext(channel="cli", chat_id="direct", original_user_text="咖啡"),
+    )
+    assert block is not None and "只喝手冲咖啡" in block.content
 
 
 def test_dream_gets_claim_tools_and_daily_write_access(tmp_path):
@@ -282,7 +295,12 @@ async def test_context_keeps_overdue_commitment_without_core_memory(tmp_path):
     assert result["claim"]["due_at"] == "2030-05-03T15:59:59Z"
     await tool.execute(text="临时饮食偏好", kind="preference", core=True, expires_at="2030-05-02")
     prompt = builder.build_system_prompt()
-    assert "完成周报" in prompt and "已逾期" in prompt
+    block = await MemorySearchTool(builder.memory).runtime_context_provider()(
+        RequestContext(channel="cli", chat_id="direct"),
+    )
+    assert block is not None
+    assert "完成周报" in block.content and "已逾期" in block.content
+    assert "完成周报" not in prompt
     assert "临时饮食偏好" not in prompt
     assert not builder.memory.memory_file.exists()
 

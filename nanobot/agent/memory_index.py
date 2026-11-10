@@ -28,11 +28,14 @@ _MAX_QUERY_TERMS = 32
 _SNIPPET_CHARS = 300
 _FORGOTTEN = "[已遗忘]"
 # Frequent function words carry no topic signal for recall.
-_CJK_STOP_BIGRAMS = frozenset({
+_CJK_STOP_WORDS = frozenset({
     "什么", "怎么", "这个", "那个", "我们", "你们", "他们", "一下", "可以", "不是",
     "就是", "还是", "没有", "现在", "如果", "因为", "所以", "然后", "一个", "请问",
     "帮我", "告诉", "知道", "我的", "你的", "是不", "的是", "了吗", "吗？", "一些",
+    "还有", "以及", "是否", "之前", "之后", "最近", "继续", "记得", "记住", "有关",
+    "为什么", "是什么", "怎么样", "能不能", "有没有", "是不是", "可不可以", "我想问",
 })
+_CJK_STOP_RE = re.compile("|".join(sorted(_CJK_STOP_WORDS, key=len, reverse=True)))
 _ASCII_STOP_WORDS = frozenset({
     "the", "and", "for", "you", "are", "was", "what", "with", "this", "that", "have",
     "from", "can", "how", "please", "about", "your", "my", "me", "is", "it", "to", "of",
@@ -54,7 +57,8 @@ def query_terms(query: str) -> list[str]:
             seen.add(term)
             terms.append(term)
 
-    for word in _WORD_RE.findall(query.casefold()):
+    # Remove whole stop phrases first, so overlapping trigrams cannot revive them.
+    for word in _WORD_RE.findall(_CJK_STOP_RE.sub(" ", query.casefold())):
         position = 0
         for match in _CJK_RE.finditer(word):
             latin = word[position:match.start()]
@@ -64,14 +68,11 @@ def query_terms(query: str) -> list[str]:
             if len(run) == 1:
                 pass
             elif len(run) == 2:
-                if run not in _CJK_STOP_BIGRAMS:
-                    add(run)
+                add(run)
             else:
                 for size in (3, 2):
                     for start in range(len(run) - size + 1):
                         gram = run[start:start + size]
-                        if size == 2 and gram in _CJK_STOP_BIGRAMS:
-                            continue
                         add(gram)
             position = match.end()
         latin = word[position:]
@@ -94,6 +95,7 @@ class SearchHit:
     kind: str | None
     score: float
     status: str = "active"
+    person_id: str | None = None
 
     def to_public(self) -> dict[str, object]:
         return {
@@ -286,17 +288,30 @@ class MemoryIndex:
                     scope = "ledger"
                 else:
                     scope = path.split("/")[1]
-                entity = decode_entity(content) if scope in {"people", "projects"} else None
+                issues: set[str] = set()
+                entity = (
+                    decode_entity(content, issues=issues) if scope in {"people", "projects"}
+                    else None
+                )
                 content_hash = digest(content)
+                entity_id = entity.entity_id if entity else None
+                if entity_id is not None and conn.execute(
+                    "SELECT 1 FROM documents WHERE entity_id=?", (entity_id,),
+                ).fetchone() is not None:
+                    issues.add("重复实体 ID")
+                    entity_id = None
+                for issue in sorted(issues):
+                    self._warn(path, content_hash, issue)
                 conn.execute("INSERT INTO documents VALUES (?, ?, ?, ?, ?)", (
                     path, content_hash, scope,
-                    entity.entity_id if entity else None,
-                    entity.model_dump_json() if entity else None,
+                    entity_id, entity.model_dump_json() if entity_id and entity else None,
                 ))
-                if scope == "ledger":
+                if scope == "ledger" or (
+                    entity is not None and ("entity", entity.entity_id) in tombstones
+                ):
                     continue
                 heading = ""
-                issues: set[str] = set()
+                issues = set()
                 for number, raw in enumerate(content.splitlines(), 1):
                     text = line_text(raw)
                     if text.startswith("#"):
@@ -314,7 +329,11 @@ class MemoryIndex:
                         ("claim", marker_id) in tombstones for marker_id in marked_claim_ids(raw)
                     )
                     forgotten_text = claim is None and ("chunk", digest(text)) in tombstones
-                    if forgotten_id or forgotten_text:
+                    forgotten_entity = claim is not None and any(
+                        ("entity", entity_id) in tombstones
+                        for entity_id in (claim.person_id, claim.project_id)
+                    )
+                    if forgotten_id or forgotten_text or forgotten_entity:
                         continue
                     conn.execute("""
                         INSERT INTO chunks (
@@ -327,6 +346,21 @@ class MemoryIndex:
                     ))
                 for issue in sorted(issues):
                     self._warn(path, content_hash, issue)
+            entity_chunks = """
+                SELECT ch.id FROM chunks ch JOIN documents d ON d.path=ch.path
+                WHERE EXISTS (
+                    SELECT 1 FROM tombstones t WHERE t.target_type='entity' AND (
+                        t.target_id=d.entity_id
+                        OR t.target_id=json_extract(ch.metadata, '$.person_id')
+                        OR t.target_id=json_extract(ch.metadata, '$.project_id')
+                    )
+                )
+            """
+            affected.update(row[0] for row in conn.execute(f"""
+                SELECT claim_id FROM chunks WHERE id IN ({entity_chunks})
+                    AND claim_id IS NOT NULL
+            """))
+            conn.execute(f"DELETE FROM chunks WHERE id IN ({entity_chunks})")
             conn.execute("""
                 DELETE FROM chunks
                 WHERE claim_id IN (SELECT target_id FROM tombstones WHERE target_type='claim')
@@ -336,6 +370,11 @@ class MemoryIndex:
             """)
             if "memory/ledger.md" in changed:
                 affected.update(target for kind, target in tombstones if kind == "claim")
+            conn.execute("""
+                UPDATE documents SET entity_json=NULL WHERE entity_id IN (
+                    SELECT target_id FROM tombstones WHERE target_type='entity'
+                )
+            """)
             self._project_claims(conn, affected)
             return len(changed)
 
@@ -408,6 +447,9 @@ class MemoryIndex:
     def search(
         self, query: str, *, now: str, limit: int, min_score: float,
         exclude: Iterable[tuple[str, int]], include_history: bool,
+        scopes: Sequence[str] = ("core", "bank", "projects", "people", "daily"),
+        active_projects_only: bool = False, person_ids: Sequence[str] | None = None,
+        exclude_texts: Iterable[str] = (), deduplicate: bool = False,
     ) -> list[SearchHit]:
         terms = query_terms(query)
         if not terms:
@@ -426,20 +468,56 @@ class MemoryIndex:
                 escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
                 params.append("%" + escaped + "%")
             where = "(" + " OR ".join(matches) + ")"
+            where += " AND ch.scope IN (" + ",".join("?" for _ in scopes) + ")"
+            params.extend(scopes)
             if not include_history:
-                where += " AND ch.current=1 AND (c.expires_at IS NULL OR c.expires_at > ?)"
+                where += """
+                    AND ch.current=1
+                    AND COALESCE(c.expires_at, json_extract(ch.metadata, '$.expires_at'), ?) > ?
+                """
+                params.append("9999")
                 params.append(now)
+            if active_projects_only:
+                where += """
+                    AND (ch.scope!='projects' OR EXISTS (
+                        SELECT 1 FROM documents p WHERE p.path=ch.path
+                          AND json_extract(p.entity_json, '$.status')='active'
+                    ))
+                    AND NOT EXISTS (
+                        SELECT 1 FROM documents p
+                        WHERE (p.entity_id=json_extract(ch.metadata, '$.project_id')
+                               OR p.path=ch.path AND p.scope='projects')
+                          AND json_extract(p.entity_json, '$.status')!='active'
+                    )
+                """
+            if person_ids is not None:
+                placeholders = ",".join("?" for _ in person_ids)
+                where += f"""
+                    AND (json_extract(ch.metadata, '$.person_id') IS NULL
+                         OR json_extract(ch.metadata, '$.person_id') IN ({placeholders}))
+                    AND (ch.scope!='people' OR ch.path IN (
+                        SELECT path FROM documents WHERE entity_id IN ({placeholders})
+                    ))
+                """
+                params.extend(person_ids)
+                params.extend(person_ids)
             rows = conn.execute(f"""
                 SELECT ch.*, c.claim_id AS selected_id, c.kind, c.expires_at,
-                       COALESCE(c.status, json_extract(ch.metadata, '$.status')) AS status
+                       COALESCE(c.status, json_extract(ch.metadata, '$.status')) AS status,
+                       COALESCE(json_extract(ch.metadata, '$.person_id'),
+                           CASE WHEN d.scope='people' THEN d.entity_id END) AS person_id
                 FROM chunks ch LEFT JOIN claims c
                   ON c.claim_id=ch.claim_id AND c.path=ch.path AND c.line=ch.line_start
+                JOIN documents d ON d.path=ch.path
                 WHERE {where}
             """, params)
             excluded = set(exclude)
+            excluded_texts = {text.casefold() for text in exclude_texts}
             hits: list[SearchHit] = []
             for row in rows:
                 if (row["path"], row["line_start"]) in excluded:
+                    continue
+                if row["text"].casefold() in excluded_texts:
                     continue
                 score = _score(row["text"], terms)
                 if score <= min_score:
@@ -452,10 +530,15 @@ class MemoryIndex:
                     status = "expired"
                 hits.append(SearchHit(
                     row["path"], row["line_start"], row["text"][:_SNIPPET_CHARS],
-                    row["selected_id"], row["kind"], score, status,
+                    row["selected_id"], row["kind"], score, status, row["person_id"],
                 ))
         hits.sort(key=lambda hit: (
             -hit.score, hit.claim_id is None,
             hit.path.startswith("memory/daily"), hit.path, hit.line,
         ))
+        if deduplicate:
+            unique: dict[str, SearchHit] = {}
+            for hit in hits:
+                unique.setdefault(hit.text.casefold(), hit)
+            hits = list(unique.values())
         return hits[:limit]

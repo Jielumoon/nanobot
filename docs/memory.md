@@ -283,6 +283,10 @@ When structured memory is enabled, the agent may change memory during a normal c
 
 No extra scheduled model calls are added. With claims enabled, compaction summaries keep short user quotes for preferences and commitments, and Dream records durable items through `memory_remember` with a kind, quote, confidence, expiry, and supersede links instead of editing them in by hand. Dream also receives a list of recently forgotten memories so it does not restore them.
 
+## 已知风险
+
+结构化记忆会在本地模型重放投影中移除旧轮次的 memory 来源块，不改写 `sessions.sqlite3`。但 provider 保存的不透明续接状态可能仍携带旧 memory 上下文；清理本地记忆文件或重放消息不会使这类状态自动失效。因此，已遗忘内容仍可能通过 provider 续接状态进入后续请求。该续接状态的失效策略尚未实现。
+
 ## In Practice
 
 What this means in daily use is simple:

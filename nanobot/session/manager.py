@@ -15,6 +15,7 @@ from nanobot.providers.base import ProviderConversationState
 from nanobot.runtime_context import (
     RUNTIME_CONTEXT_HISTORY_META,
     public_history_message,
+    replay_history_message,
 )
 from nanobot.session.display_history import HistoryFact, HistoryReader
 from nanobot.session.history_visibility import HIDDEN_HISTORY_META, is_hidden_history_message
@@ -258,6 +259,8 @@ class Session:
             )
             if not include_runtime_context:
                 message = public_history_message(message)
+            else:
+                message = replay_history_message(message)
             content = message.get("content", "")
             role = message.get("role")
             if role == "assistant" and isinstance(content, str):

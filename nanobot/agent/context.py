@@ -223,7 +223,9 @@ class ContextBuilder:
                     record_source(file_path, "", loaded=False)
                     continue
                 if filename == "USER.md" and self.memory.claims is not None:
-                    content = self.memory.claims.project_text(content, path="USER.md")
+                    content = self.memory.claims.project_text(
+                        content, path="USER.md", stable_core=True,
+                    )
                 elif filename != "AGENTS.md":
                     content = strip_claim_markers(content)
                 parts.append(f"## {filename}\n\n{content}")

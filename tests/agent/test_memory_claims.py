@@ -39,7 +39,7 @@ def claims(request, tmp_path):
         tmp_path / "memory", lock=threading.RLock(), timezone="Asia/Shanghai", clock=lambda: moment,
     )
     return ClaimStore(
-        tmp_path, lock=daily.lock, daily=daily, timezone="Asia/Shanghai",
+        tmp_path, lock=daily.lock, timezone="Asia/Shanghai",
         clock=lambda: moment, use_fts=request.param,
     )
 
@@ -99,7 +99,7 @@ def test_database_loss_preserves_all_metadata_and_many_to_many_links(claims):
     replacement = claims.remember(ClaimDraft(
         text="合并计划", kind="commitment", quote="我们一起周五前交付", confidence=0.8,
         supersedes=ids, due_at="2030-05-06", expires_at="2031-05-06",
-        person_id="e_person", project_id="e_project",
+        person="小林", project="联合计划",
     ), source_ref="history:42", session_key="cli:direct", message_id="m1")
     extra = claims.remember(ClaimDraft(text="另一个后续决定", kind="decision", supersedes=ids))
     claims.db_path.unlink()
@@ -131,7 +131,7 @@ def test_future_metadata_survives_expiry_archive(claims):
 
 
 def test_forget_all_matches_in_one_file_including_copies(claims):
-    a = claims.remember(ClaimDraft(text="喜欢手冲咖啡", kind="preference"))
+    a = claims.remember(ClaimDraft(text="喜欢手冲咖啡", kind="fact"))
     b = claims.remember(ClaimDraft(text="咖啡豆每月买一次", kind="fact"))
     path = claims.workspace / "memory/bank/facts.md"
     path.write_text(path.read_text() + "- 办公室咖啡机在三楼\n- 保留的普通行\n")
@@ -351,7 +351,12 @@ def test_expired_core_is_filtered_before_maintenance_and_overdue_stays(tmp_path)
     ))
     prompt = store.prompt_memory(store.read_memory())
     assert "临时有效的事实" not in prompt
-    assert "周五提交报告" in prompt and "已逾期" in prompt
+    from nanobot.agent.memory_recall import MemoryRuntimeContext
+
+    block = MemoryRuntimeContext(store, store.claims).build("")
+    assert block is not None
+    assert "周五提交报告" in block.content and "已逾期" in block.content
+    assert "周五提交报告" not in prompt
     store.claims.expire_due()
     store.claims.db_path.unlink()
     assert store.claims.get(expired.claim.claim_id).status == "expired"

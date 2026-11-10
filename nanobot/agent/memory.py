@@ -26,8 +26,6 @@ from nanobot.agent.memory_claims import (
 from nanobot.agent.memory_documents import (
     Clock,
     DailyNotes,
-    iso,
-    local_day,
     redact_history_lines,
     strip_claim_markers,
     utc_now,
@@ -111,7 +109,7 @@ class MemoryStore:
             if self.config.daily_notes else None
         )
         self.claims: ClaimStore | None = (
-            ClaimStore(workspace, daily=self.daily, timezone=self.timezone, clock=clock, lock=self._append_lock)
+            ClaimStore(workspace, timezone=self.timezone, clock=clock, lock=self._append_lock)
             if self.config.claims_enabled else None
         )
         self._git = GitStore(
@@ -309,9 +307,9 @@ class MemoryStore:
         return "\n".join(kept).rstrip(), len(kept)
 
     def prompt_memory(self, memory: str) -> str:
-        """MEMORY.md plus current commitments, with the shared validity filter."""
+        """Stable core only; all dynamic memory belongs to the current message."""
         clean = (
-            self.claims.project_text(memory, path="memory/MEMORY.md")
+            self.claims.project_text(memory, path="memory/MEMORY.md", stable_core=True)
             if self.claims is not None else strip_claim_markers(memory)
         )
         head = self.memory_head(clean)
@@ -322,24 +320,26 @@ class MemoryStore:
                 "[MEMORY.md truncated. Related entries are recalled in runtime context; "
                 "use memory_search to look up other saved memory.]"
             )
-        if self.claims is not None:
-            commitments = self.claims.active_commitments(self.config.commitment_limit)
-            if commitments:
-                lines = ["## Active Commitments"]
-                now = iso(self.clock())
-                for claim in commitments:
-                    due = f" (due {local_day(claim.due_at, self.timezone)})" if claim.due_at else ""
-                    overdue = "（已逾期）" if claim.due_at is not None and claim.due_at < now else ""
-                    lines.append(f"- {claim.text}{due}{overdue}")
-                parts.append("\n".join(lines))
         return "\n\n".join(parts)
 
     def recall_exclusions(self) -> list[tuple[str, int]]:
-        """MEMORY.md lines already present in the truncated system-prompt head."""
-        head = self.memory_head(self.read_memory())
-        if head is None:
+        """Original positions fully visible in the stable core prompt."""
+        if self.claims is None:
             return []
-        return [("memory/MEMORY.md", line) for line in range(1, head[1] + 1)]
+        excluded: list[tuple[str, int]] = []
+        for path, text in (("USER.md", self.read_user()), ("memory/MEMORY.md", self.read_memory())):
+            lines = self.claims.project_lines(text, path=path, stable_core=True)
+            clean = "\n".join(line for _, line in lines)
+            head = self.memory_head(clean) if path == "memory/MEMORY.md" else None
+            visible = clean if head is None else head[0]
+            used = 0
+            for number, line in lines:
+                used += len(line)
+                if used > len(visible):
+                    break
+                excluded.append((path, number))
+                used += 1
+        return excluded
 
     def append_daily_summary(self, summary: str, *, session_key: str | None = None) -> None:
         """Mirror a compaction checkpoint into today's daily note when enabled."""
@@ -353,6 +353,7 @@ class MemoryStore:
         claim_ids: list[str] | None = None,
         query: str | None = None,
         all_matches: bool = False,
+        person: str | None = None, project: str | None = None,
     ) -> tuple[ForgetResult, int]:
         """Retract claims and matching entries, then redact them from history.jsonl.
 
@@ -365,9 +366,12 @@ class MemoryStore:
             entries = [(cursor, entry["content"]) for entry, cursor in self._iter_valid_entries()]
             result = self.claims.forget(
                 claim_ids=claim_ids or [], query=query, all_matches=all_matches,
-                history_entries=entries,
+                history_entries=entries, person=person, project=project,
             )
-            redacted = self.reconcile_history() if not result.candidates else 0
+            redacted = (
+                self.reconcile_history() if not result.candidates and not result.needs_confirmation
+                else 0
+            )
         return result, redacted
 
     def reconcile_history(self) -> int:
@@ -707,8 +711,11 @@ class MemoryStore:
         if not self._git.is_initialized():
             return ""
         paths: list[str] = list(self._DREAM_CONTENT_PATHS)
-        if self.daily is not None:
-            paths.extend(path for path in self._git.tracked_paths() if path.startswith("memory/daily/"))
+        folders = (
+            ("memory/bank/", "memory/people/", "memory/projects/", "memory/daily/")
+            if self.claims is not None else ("memory/daily/",) if self.daily is not None else ()
+        )
+        paths.extend(path for path in self._git.tracked_paths() if path.startswith(folders))
         return self._git.summarize_working_tree(paths)
 
     def build_dream_tools(self) -> ToolRegistry:
@@ -761,7 +768,9 @@ class MemoryStore:
         ))
         if self.claims is not None:
             from nanobot.agent.tools.memory_claims import (
+                MemoryExplainTool,
                 MemoryForgetTool,
+                MemoryProjectTool,
                 MemoryRememberTool,
                 MemorySearchTool,
             )
@@ -769,6 +778,8 @@ class MemoryStore:
             tools.register(MemoryRememberTool(self))
             tools.register(MemorySearchTool(self))
             tools.register(MemoryForgetTool(self))
+            tools.register(MemoryProjectTool(self))
+            tools.register(MemoryExplainTool(self))
         return tools
 
     @staticmethod
