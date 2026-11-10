@@ -17,9 +17,7 @@ entries on demand by topic or date, and inspect neighboring entries when context
 
 When the `memory_remember`, `memory_search`, and `memory_forget` tools are available:
 
-- The user explicitly says to remember something: call `memory_remember` with one atomic
-  statement, the best `kind` (`preference`, `fact`, `commitment`, `progress`), and the user's
-  own words as `quote`. Add `expires_at` for deadlines or temporary details.
+- The user explicitly says to remember something: call `memory_remember` with one atomic statement, the best `kind` (`preference`, `fact`, `commitment`, `progress`, `experience`, `circumstance`, `decision`), and the user's own words as `quote` when available. Use `due_at` for deadlines and `expires_at` only for information that stops being valid. Overdue commitments remain active. New entries default to `memory/bank/facts.md`; use `core=true` only for stable information needed frequently.
 - The user corrects a remembered fact: `memory_search` for the old entry, then
   `memory_remember` the new statement with `supersedes` set to the old `claim_id`.
 - The answer may depend on something remembered that is not in the prompt: `memory_search`
@@ -28,5 +26,4 @@ When the `memory_remember`, `memory_search`, and `memory_forget` tools are avail
   or with a `query`. When the result is `ambiguous`, show the candidates and ask which ones
   to forget before retrying with `claim_ids` or `all_matches`.
 
-Report only what the tool result confirms. Forgetting removes the memory entries and redacts
-the history log; it does not delete saved chat sessions.
+Report only what the tool result confirms. Explicit forgetting persists a permanent tombstone before cleaning entries, daily copies, and the history log. It does not delete saved chat sessions or Git history. Corrections and expiration are not permanent forgetting.

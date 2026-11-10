@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 from nanobot.agent.memory import MemoryStore
-from nanobot.agent.memory_claims import strip_claim_markers
+from nanobot.agent.memory_documents import Clock, strip_claim_markers, utc_now
 from nanobot.agent.skills import SkillsLoader
 from nanobot.agent.tools import mcp as mcp_tools
 from nanobot.agent.tools import sessions as session_tools
@@ -86,10 +86,11 @@ class ContextBuilder:
         disabled_skills: list[str] | None = None,
         *,
         memory_config: MemoryConfig | None = None,
+        clock: Clock = utc_now,
     ):
         self.workspace = workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace, config=memory_config)
+        self.memory = MemoryStore(workspace, config=memory_config, timezone=timezone, clock=clock)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
 
     def build_system_prompt(
@@ -120,10 +121,14 @@ class ContextBuilder:
 
         if include_memory:
             memory = self.memory.read_memory()
-            if memory and not self._is_template_content(memory, "memory/MEMORY.md"):
-                prompt_memory = self.memory.prompt_memory(memory)
-                parts.append(prompt_memory)
-                record_source(self.memory.memory_file, prompt_memory)
+            is_default = self._is_template_content(memory, "memory/MEMORY.md")
+            if self.memory.claims is not None or (memory and not is_default):
+                prompt_memory = self.memory.prompt_memory("" if is_default else memory)
+                if prompt_memory.strip():
+                    parts.append(prompt_memory)
+                    record_source(self.memory.memory_file, prompt_memory)
+                elif self.memory.memory_file.is_file():
+                    record_source(self.memory.memory_file, "", loaded=False)
             elif self.memory.memory_file.is_file():
                 record_source(self.memory.memory_file, "", loaded=False)
 
@@ -217,7 +222,9 @@ class ContextBuilder:
                 ):
                     record_source(file_path, "", loaded=False)
                     continue
-                if filename != "AGENTS.md":
+                if filename == "USER.md" and self.memory.claims is not None:
+                    content = self.memory.claims.project_text(content, path="USER.md")
+                elif filename != "AGENTS.md":
                     content = strip_claim_markers(content)
                 parts.append(f"## {filename}\n\n{content}")
                 record_source(file_path, content)

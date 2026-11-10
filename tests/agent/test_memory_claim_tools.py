@@ -5,6 +5,7 @@ import pytest
 
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.memory import Consolidator, MemoryStore
+from nanobot.agent.memory_documents import ClaimDraft
 from nanobot.agent.tools.context import RequestContext, ToolContext, request_context
 from nanobot.agent.tools.loader import ToolLoader
 from nanobot.agent.tools.memory_claims import (
@@ -40,14 +41,20 @@ def test_memory_tools_load_only_when_claims_are_enabled(tmp_path):
 async def test_remember_tool_records_turn_provenance(tmp_path):
     store = _store(tmp_path)
     tool = MemoryRememberTool(store)
-    ctx = RequestContext(channel="cli", chat_id="direct", message_id="m-1", session_key="cli:direct")
+    ctx = RequestContext(
+        channel="cli", chat_id="direct", message_id="m-1", session_key="cli:direct",
+    )
 
     with request_context(ctx):
-        result = json.loads(await tool.execute(text="只喝手冲咖啡", kind="preference", quote="我只喝手冲"))
+        result = json.loads(await tool.execute(
+            text="只喝手冲咖啡", kind="preference", core=True, quote="我只喝手冲",
+        ))
 
     assert result["status"] == "saved"
     claim = store.claims.get(result["claim"]["claim_id"])
-    assert (claim.session_key, claim.message_id, claim.source_file) == ("cli:direct", "m-1", "USER.md")
+    assert (claim.session_key, claim.message_id, claim.source_file) == (
+        "cli:direct", "m-1", "USER.md",
+    )
 
 
 async def test_remember_tool_rejects_unknown_kind(tmp_path):
@@ -58,7 +65,9 @@ async def test_remember_tool_rejects_unknown_kind(tmp_path):
 
 async def test_forget_tool_redacts_history_journal(tmp_path):
     store = _store(tmp_path)
-    remembered = store.claims.remember("养了一只叫 Luna 的猫", "fact", quote="我家猫叫 Luna")
+    remembered = store.claims.remember(ClaimDraft(
+        text="养了一只叫 Luna 的猫", kind="fact", quote="我家猫叫 Luna",
+    ))
     store.append_history("- [permanent] 养了一只叫 Luna 的猫 (user: \"我家猫叫 Luna\")")
     store.append_history("- [durable] 部署在 1 核 1G 机器")
 
@@ -76,8 +85,8 @@ async def test_forget_tool_redacts_history_journal(tmp_path):
 
 async def test_forget_tool_reports_ambiguous_query(tmp_path):
     store = _store(tmp_path)
-    store.claims.remember("喜欢手冲咖啡", "preference")
-    store.claims.remember("咖啡豆每月买一次", "fact")
+    store.claims.remember(ClaimDraft(text="喜欢手冲咖啡", kind="preference", core=True))
+    store.claims.remember(ClaimDraft(text="咖啡豆每月买一次", kind="fact"))
 
     result = json.loads(await MemoryForgetTool(store).execute(query="咖啡"))
 
@@ -88,15 +97,16 @@ async def test_forget_tool_reports_ambiguous_query(tmp_path):
 
 async def test_search_tool_returns_sources_and_claim_ids(tmp_path):
     store = _store(tmp_path)
-    remembered = store.claims.remember("住在上海", "fact")
+    remembered = store.claims.remember(ClaimDraft(text="住在上海", kind="fact"))
 
     result = json.loads(await MemorySearchTool(store).execute(query="上海"))
 
     assert result["results"] == [{
-        "source": f"memory/MEMORY.md:{remembered.claim.source_line}",
+        "source": f"memory/bank/facts.md:{remembered.claim.source_line}",
         "claim_id": remembered.claim.claim_id,
         "kind": "fact",
         "text": "住在上海",
+        "status": "active",
     }]
 
 
@@ -124,7 +134,9 @@ def test_context_truncates_long_memory_and_lists_commitments(tmp_path):
         memory_config=MemoryConfig(claims_enabled=True, inject_max_chars=200),
     )
     _long_memory(builder.memory)
-    builder.memory.claims.remember("周五前提交周报", "commitment", expires_at="2099-01-01")
+    builder.memory.claims.remember(ClaimDraft(
+        text="周五前提交周报", kind="commitment", due_at="2099-01-01",
+    ))
 
     prompt = builder.build_system_prompt()
 
@@ -144,7 +156,7 @@ def test_context_ignores_injection_limit_without_claims(tmp_path):
 
 def test_context_strips_claim_markers_and_explains_memory_tools(tmp_path):
     enabled = ContextBuilder(tmp_path, memory_config=MemoryConfig(claims_enabled=True))
-    enabled.memory.claims.remember("只喝手冲咖啡", "preference")
+    enabled.memory.claims.remember(ClaimDraft(text="只喝手冲咖啡", kind="preference", core=True))
 
     prompt = enabled.build_system_prompt()
 
@@ -184,10 +196,11 @@ def test_dream_gets_claim_tools_and_daily_write_access(tmp_path):
     assert store.daily.dir in write._extra_write_allowed_dirs
 
 
-def test_dream_prompt_adds_claim_guidance_and_forgotten_items(tmp_path):
+def test_dream_prompt_uses_redacted_history_without_forgotten_content(tmp_path):
     store = _store(tmp_path, daily_notes=True)
-    claim = store.claims.remember("养了一只猫", "fact")
-    store.claims.forget(claim_ids=[claim.claim.claim_id])
+    claim = store.claims.remember(ClaimDraft(text="养了一只猫", kind="fact"))
+    store.append_history("养了一只猫")
+    store.forget_memory(claim_ids=[claim.claim.claim_id])
     store.append_history("- [permanent] 只喝手冲咖啡")
 
     result = store.build_dream_prompt()
@@ -196,8 +209,9 @@ def test_dream_prompt_adds_claim_guidance_and_forgotten_items(tmp_path):
     prompt = result[0]
     assert "## Structured memory" in prompt
     assert "memory/daily/YYYY-MM-DD.md" in prompt
-    assert "## Forgotten Memories" in prompt and "- 养了一只猫" in prompt
-    assert prompt.index("## Forgotten Memories") < prompt.index("## Conversation History")
+    assert "养了一只猫" not in prompt
+    assert "[已遗忘]" in prompt
+    assert "只喝手冲咖啡" in prompt
 
 
 def test_dream_prompt_unchanged_when_structured_memory_is_off(tmp_path):
@@ -253,3 +267,54 @@ async def test_archive_summary_reaches_daily_note_only_when_enabled(tmp_path, da
         assert "- 正在实现记忆第一版" in path.read_text(encoding="utf-8")
     else:
         assert not note.exists()
+
+
+async def test_context_keeps_overdue_commitment_without_core_memory(tmp_path):
+    from datetime import datetime, timezone
+
+    builder = ContextBuilder(
+        tmp_path, timezone="Asia/Shanghai",
+        clock=lambda: datetime(2030, 5, 3, 16, 30, tzinfo=timezone.utc),
+        memory_config=MemoryConfig(claims_enabled=True),
+    )
+    tool = MemoryRememberTool(builder.memory)
+    result = json.loads(await tool.execute(text="完成周报", kind="commitment", due_at="2030-05-03"))
+    assert result["claim"]["due_at"] == "2030-05-03T15:59:59Z"
+    await tool.execute(text="临时饮食偏好", kind="preference", core=True, expires_at="2030-05-02")
+    prompt = builder.build_system_prompt()
+    assert "完成周报" in prompt and "已逾期" in prompt
+    assert "临时饮食偏好" not in prompt
+    assert not builder.memory.memory_file.exists()
+
+
+async def test_search_can_inspect_expired_history(tmp_path):
+    from datetime import datetime, timezone
+
+    store = MemoryStore(
+        tmp_path, clock=lambda: datetime(2030, 5, 3, tzinfo=timezone.utc),
+        config=MemoryConfig(claims_enabled=True),
+    )
+    store.claims.remember(ClaimDraft(text="临时工位在三楼", kind="circumstance", expires_at="2030-05-01"))
+    store.claims.expire_due()
+    tool = MemorySearchTool(store)
+    assert json.loads(await tool.execute(query="工位"))["results"] == []
+    hits = json.loads(await tool.execute(query="工位", include_history=True))["results"]
+    assert hits[0]["text"] == "临时工位在三楼" and hits[0]["status"] == "expired"
+
+
+@pytest.mark.parametrize("default_memory", [False, True])
+def test_context_omits_empty_memory_section_without_commitments(tmp_path, default_memory):
+    from nanobot.utils.helpers import load_bundled_template
+
+    builder = ContextBuilder(tmp_path, memory_config=MemoryConfig(claims_enabled=True))
+    content = load_bundled_template("memory/MEMORY.md") if default_memory else ""
+    builder.memory.write_memory(content)
+    assert builder.build_system_prompt() == builder.build_system_prompt(include_memory=False)
+
+
+async def test_forget_rejects_one_character_query_even_with_id(tmp_path):
+    store = _store(tmp_path)
+    saved = store.claims.remember(ClaimDraft(text="养了一只猫", kind="fact"))
+    result = await MemoryForgetTool(store).execute(claim_ids=[saved.claim.claim_id], query="猫")
+    assert result.is_error
+    assert store.claims.get(saved.claim.claim_id).status == "active"

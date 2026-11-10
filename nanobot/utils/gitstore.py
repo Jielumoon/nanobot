@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
+from nanobot.utils.atomic_file import atomic_write_text
+
 if TYPE_CHECKING:
     from dulwich.objects import Blob, Commit, ObjectID, Tree
     from dulwich.refs import Ref
@@ -50,12 +52,14 @@ class GitStore:
         workspace: Path,
         tracked_files: list[str],
         tracked_dirs: list[str] | None = None,
+        restore_excluded: list[str] | None = None,
     ):
         self._workspace = workspace
         self._tracked_files = tracked_files
         # Directories whose ``*.md`` files are tracked as they appear, such as
         # dated memory notes.
         self._tracked_dirs = list(tracked_dirs or [])
+        self._restore_excluded = set(restore_excluded or [])
 
     def is_initialized(self) -> bool:
         """Check if the git repo has been initialized."""
@@ -540,14 +544,14 @@ class GitStore:
                 commit_tree = cast("Tree", repo[typed_commit.tree])
 
                 restored: list[str] = []
-                restore_paths = list(self._tracked_files)
+                restore_paths = [path for path in self._tracked_files if path not in self._restore_excluded]
                 for directory in self._tracked_dirs:
                     parent_files = self._tree_dir_files(repo, tree, directory)
-                    restore_paths.extend(parent_files)
+                    restore_paths.extend(path for path in parent_files if path not in self._restore_excluded)
                     # Files first introduced by the reverted commit are removed;
                     # files created by later commits are left untouched.
                     for added in self._tree_dir_files(repo, commit_tree, directory):
-                        if added not in parent_files:
+                        if added not in parent_files and added not in self._restore_excluded:
                             target = self._workspace / added
                             if target.exists():
                                 target.unlink()
@@ -557,7 +561,7 @@ class GitStore:
                     if content is not None:
                         dest = self._workspace / filepath
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        dest.write_text(content, encoding="utf-8")
+                        atomic_write_text(dest, content)
                         restored.append(filepath)
 
             if not restored:

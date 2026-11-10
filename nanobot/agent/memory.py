@@ -15,16 +15,22 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
 from nanobot.agent.memory_claims import (
     ClaimStore,
-    DailyNotes,
     ForgetResult,
+)
+from nanobot.agent.memory_documents import (
+    Clock,
+    DailyNotes,
+    iso,
     local_day,
-    redact_terms,
+    redact_history_lines,
     strip_claim_markers,
+    utc_now,
 )
 from nanobot.config.schema import MemoryConfig
 from nanobot.events import NO_EVENTS, CompactionReason, ContextCompactionEvent, EventSink
@@ -34,6 +40,7 @@ from nanobot.providers.conversation_state import ProviderConversationStateContro
 from nanobot.runtime_context import public_history_messages
 from nanobot.session.manager import Session, SessionManager
 from nanobot.session.summary import is_summary_checkpoint, session_summary_from_metadata
+from nanobot.utils.atomic_file import atomic_write_text
 from nanobot.utils.gitstore import GitStore
 from nanobot.utils.helpers import (
     atomic_write_lines,
@@ -78,8 +85,12 @@ class MemoryStore:
         max_history_entries: int = _DEFAULT_MAX_HISTORY,
         *,
         config: MemoryConfig | None = None,
+        timezone: str | None = None,
+        clock: Clock = utc_now,
     ):
         self.workspace = workspace
+        self.timezone = timezone or "UTC"
+        self.clock = clock
         self.config = config or MemoryConfig()
         self.max_history_entries = max_history_entries
         self.memory_dir = ensure_dir(workspace / "memory")
@@ -94,17 +105,20 @@ class MemoryStore:
         self._malformed_entry_logged = False
         self._oversize_logged = False
         self._dream_prompt_oversize_logged = False
-        self._append_lock = threading.Lock()
+        self._append_lock = threading.RLock()
         self.daily: DailyNotes | None = (
-            DailyNotes(self.memory_dir) if self.config.daily_notes else None
+            DailyNotes(self.memory_dir, timezone=self.timezone, clock=clock, lock=self._append_lock)
+            if self.config.daily_notes else None
         )
         self.claims: ClaimStore | None = (
-            ClaimStore(workspace, daily=self.daily) if self.config.claims_enabled else None
+            ClaimStore(workspace, daily=self.daily, timezone=self.timezone, clock=clock, lock=self._append_lock)
+            if self.config.claims_enabled else None
         )
         self._git = GitStore(
             workspace,
-            tracked_files=["SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor"],
-            tracked_dirs=["memory/daily"] if self.daily is not None else None,
+            tracked_files=["SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor", "memory/ledger.md"],
+            tracked_dirs=["memory/daily", "memory/bank", "memory/people", "memory/projects"],
+            restore_excluded=["memory/ledger.md"],
         )
         self._maybe_migrate_legacy_history()
 
@@ -145,10 +159,10 @@ class MemoryStore:
             if entries:
                 self._write_entries(entries)
                 last_cursor = entries[-1]["cursor"]
-                self._cursor_file.write_text(str(last_cursor), encoding="utf-8")
+                atomic_write_text(self._cursor_file, str(last_cursor))
                 # Default to "already processed" so upgrades do not replay the
                 # user's entire historical archive into Dream on first start.
-                self._dream_cursor_file.write_text(str(last_cursor), encoding="utf-8")
+                atomic_write_text(self._dream_cursor_file, str(last_cursor))
 
             backup_path = self._next_legacy_backup_path()
             self.legacy_history_file.replace(backup_path)
@@ -246,21 +260,23 @@ class MemoryStore:
         return self.read_file(self.memory_file)
 
     def write_memory(self, content: str) -> None:
-        self.memory_file.write_text(content, encoding="utf-8")
+        with self._append_lock:
+            atomic_write_text(self.memory_file, content)
 
 
     def read_soul(self) -> str:
         return self.read_file(self.soul_file)
 
     def write_soul(self, content: str) -> None:
-        self.soul_file.write_text(content, encoding="utf-8")
+        atomic_write_text(self.soul_file, content)
 
 
     def read_user(self) -> str:
         return self.read_file(self.user_file)
 
     def write_user(self, content: str) -> None:
-        self.user_file.write_text(content, encoding="utf-8")
+        with self._append_lock:
+            atomic_write_text(self.user_file, content)
 
     def get_memory_context(self) -> str:
         """Return long-term memory formatted for context injection."""
@@ -293,25 +309,28 @@ class MemoryStore:
         return "\n".join(kept).rstrip(), len(kept)
 
     def prompt_memory(self, memory: str) -> str:
-        """MEMORY.md as injected into the system prompt."""
-        head = self.memory_head(memory)
-        if head is None:
-            return strip_claim_markers(memory)
-        text, last_line = head
-        total = len(strip_claim_markers(memory))
-        parts = [
-            text,
-            f"[MEMORY.md truncated: showing lines 1-{last_line} ({len(text)} of {total} characters). "
-            "Entries related to the current message are recalled in its runtime context; "
-            "use memory_search to look up anything else.]",
-        ]
+        """MEMORY.md plus current commitments, with the shared validity filter."""
+        clean = (
+            self.claims.project_text(memory, path="memory/MEMORY.md")
+            if self.claims is not None else strip_claim_markers(memory)
+        )
+        head = self.memory_head(clean)
+        visible = clean if head is None else head[0]
+        parts = [visible] if visible.strip() else []
+        if head is not None:
+            parts.append(
+                "[MEMORY.md truncated. Related entries are recalled in runtime context; "
+                "use memory_search to look up other saved memory.]"
+            )
         if self.claims is not None:
             commitments = self.claims.active_commitments(self.config.commitment_limit)
             if commitments:
                 lines = ["## Active Commitments"]
+                now = iso(self.clock())
                 for claim in commitments:
-                    due = f" (due {local_day(claim.expires_at)})" if claim.expires_at else ""
-                    lines.append(f"- {claim.text}{due}")
+                    due = f" (due {local_day(claim.due_at, self.timezone)})" if claim.due_at else ""
+                    overdue = "（已逾期）" if claim.due_at is not None and claim.due_at < now else ""
+                    lines.append(f"- {claim.text}{due}{overdue}")
                 parts.append("\n".join(lines))
         return "\n\n".join(parts)
 
@@ -326,10 +345,7 @@ class MemoryStore:
         """Mirror a compaction checkpoint into today's daily note when enabled."""
         if self.daily is None:
             return
-        try:
-            self.daily.append_summary(summary, session_key=session_key)
-        except OSError:
-            logger.exception("Failed to append compaction summary to the daily note")
+        self.daily.append_summary(summary, session_key=session_key)
 
     def forget_memory(
         self,
@@ -345,33 +361,42 @@ class MemoryStore:
         """
         if self.claims is None:
             raise RuntimeError("memory claims are disabled")
-        result = self.claims.forget(
-            claim_ids=claim_ids or [],
-            query=query,
-            all_matches=all_matches,
-        )
-        redacted = self.redact_history(result.redact_terms) if result.changed else 0
+        with self._append_lock:
+            entries = [(cursor, entry["content"]) for entry, cursor in self._iter_valid_entries()]
+            result = self.claims.forget(
+                claim_ids=claim_ids or [], query=query, all_matches=all_matches,
+                history_entries=entries,
+            )
+            redacted = self.reconcile_history() if not result.candidates else 0
         return result, redacted
 
-    def redact_history(self, terms: list[str]) -> int:
-        """Replace forgotten phrases in every history.jsonl entry; return entries changed."""
-        usable = [term for term in terms if len(term.strip()) >= 2]
-        if not usable:
+    def reconcile_history(self) -> int:
+        """Finish persistent history tombstones, including after a failed cleanup."""
+        if self.claims is None:
             return 0
         with self._append_lock:
+            tombstones = self.claims.documents.tombstones()
             entries = self._read_entries()
             changed = 0
             for entry in entries:
-                content = entry.get("content")
-                if not isinstance(content, str):
+                if not self._valid_history_payload(entry):
                     continue
-                updated = redact_terms(content, usable)
-                if updated != content:
+                cursor = self._valid_cursor(entry.get("cursor"))
+                if cursor is None:
+                    continue
+                updated = redact_history_lines(entry["content"], cursor, tombstones)
+                if updated != entry["content"]:
                     entry["content"] = updated
                     changed += 1
             if changed:
                 self._write_entries(entries)
-        return changed
+            return changed
+
+    def reconcile_files(self) -> None:
+        if self.claims is not None:
+            with self._append_lock:
+                self.claims.reconcile_files()
+                self.reconcile_history()
 
 
     def _normalize_history_entry(
@@ -427,7 +452,7 @@ class MemoryStore:
 
     def _append_history_record(self, content: str, *, session_key: str | None = None) -> int:
         """Persist already sanitized, bounded content without rewriting chunk edges."""
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        ts = self.clock().astimezone(ZoneInfo(self.timezone)).strftime("%Y-%m-%d %H:%M")
         # Cursor allocation and the append must be atomic: concurrent writers
         # could otherwise read the same current cursor and emit duplicates.
         with self._append_lock:
@@ -437,7 +462,7 @@ class MemoryStore:
                 record["session_key"] = session_key
             with open(self.history_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self._cursor_file.write_text(str(cursor), encoding="utf-8")
+            atomic_write_text(self._cursor_file, str(cursor))
         return cursor
 
     @staticmethod
@@ -514,7 +539,13 @@ class MemoryStore:
 
     def read_unprocessed_history(self, since_cursor: int) -> list[dict[str, Any]]:
         """Return history entries with a valid cursor > *since_cursor*."""
-        return [e for e, c in self._iter_valid_entries() if c > since_cursor]
+        tombstones: set[tuple[str, str]] = (
+            self.claims.documents.tombstones() if self.claims is not None else set()
+        )
+        return [
+            {**entry, "content": redact_history_lines(entry["content"], cursor, tombstones)}
+            for entry, cursor in self._iter_valid_entries() if cursor > since_cursor
+        ]
 
     def compact_history(self) -> None:
         """Drop oldest processed entries without discarding pending Dream input."""
@@ -595,7 +626,7 @@ class MemoryStore:
         return 0
 
     def set_last_dream_cursor(self, cursor: int) -> None:
-        self._dream_cursor_file.write_text(str(cursor), encoding="utf-8")
+        atomic_write_text(self._dream_cursor_file, str(cursor))
 
     def get_latest_cursor(self) -> int:
         return max(self._next_cursor() - 1, 0)
@@ -643,10 +674,8 @@ class MemoryStore:
         """
         if self.claims is not None:
             # Expiry is code-enforced on Dream's schedule rather than left to the model.
-            try:
-                self.claims.expire_due()
-            except Exception:
-                logger.exception("Failed to expire memory claims")
+            self.claims.expire_due()
+            self.reconcile_files()
         last_cursor = self.get_last_dream_cursor()
         entries = self.read_unprocessed_history(since_cursor=last_cursor)
         if not entries:
@@ -666,14 +695,6 @@ class MemoryStore:
                 claims_enabled=self.claims is not None,
                 daily_notes=self.daily is not None,
             ))
-        if self.claims is not None:
-            retracted = self.claims.list_claims(status="retracted", limit=20)
-            if retracted:
-                sections.append(
-                    "## Forgotten Memories\n"
-                    "The user asked to forget these; do not save them or their paraphrases again:\n"
-                    + "\n".join(f"- {truncate_text(claim.text, 200)}" for claim in retracted)
-                )
         prompt = "\n\n".join(sections) + f"\n\n## Conversation History\n{history_text}"
         return (prompt, batch[-1]["cursor"])
 
