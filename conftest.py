@@ -60,6 +60,8 @@ def _isolate_runtime_stores(
         return path
 
     monkeypatch.setattr(session_location, "get_runtime_subdir", runtime_subdir)
+    monkeypatch.setattr("nanobot.agent.memory_forgetting.get_data_dir", data_dir)
+    monkeypatch.setattr("nanobot.agent.memory_forgetting.get_cli_history_path", lambda: data_root / "history" / "cli_history")
     monkeypatch.setattr("nanobot.webui.history.get_webui_dir", lambda: runtime_subdir("webui"))
     monkeypatch.setattr(star_prompt, "get_webui_dir", lambda: runtime_subdir("webui"))
     monkeypatch.setattr(pairing_store, "_store_path", lambda: data_dir() / "pairing.json")

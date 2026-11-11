@@ -391,11 +391,7 @@ class MemoryStore:
         person: str | None = None, project: str | None = None,
         actor: str = "user", run_id: str | None = None,
     ) -> tuple[ForgetResult, int]:
-        """Retract claims and matching entries, then redact them from history.jsonl.
-
-        Returns the result and the number of rewritten history entries. Saved chat
-        sessions are not modified.
-        """
+        """Retract memory and return the terms used by the tool to scrub local copies."""
         if self.claims is None:
             raise RuntimeError("memory claims are disabled")
         with self._append_lock:
@@ -405,10 +401,10 @@ class MemoryStore:
                 history_entries=entries, person=person, project=project,
                 actor=actor, run_id=run_id,
             )
-            redacted = (
-                self.reconcile_history() if not result.candidates and not result.needs_confirmation
-                else 0
-            )
+            redacted = 0
+            if not result.candidates and not result.needs_confirmation:
+                redacted = self.reconcile_history()
+                self.claims.index.purge_deleted()
         return result, redacted
 
     def reconcile_history(self) -> int:
@@ -1168,19 +1164,23 @@ class MemoryArchiver:
         """Generate a replacement checkpoint and optionally persist it."""
         if not source_messages:
             return None
+        generation = self.store.generation()
 
-        def raw_fallback() -> str:
-            return self._raw_checkpoint(
-                source_messages,
-                session_key=session_key,
-                previous_summary=previous_summary,
-                max_tokens=(
-                    fallback_max_tokens
-                    if fallback_max_tokens is not None
-                    else runtime.generation.max_tokens
-                ),
-                persist=persist,
-            )
+        def raw_fallback() -> str | None:
+            with self.store._append_lock:
+                if self.store.generation() != generation:
+                    return None
+                return self._raw_checkpoint(
+                    source_messages,
+                    session_key=session_key,
+                    previous_summary=previous_summary,
+                    max_tokens=(
+                        fallback_max_tokens
+                        if fallback_max_tokens is not None
+                        else runtime.generation.max_tokens
+                    ),
+                    persist=persist,
+                )
 
         prompt = render_template(
             "agent/consolidator_archive.md",
@@ -1323,10 +1323,13 @@ class MemoryArchiver:
                 "Memory archive provider summary was not safe to replay; using raw checkpoint"
             )
             return raw_fallback()
-        if persist and summary != "(nothing)":
-            cursor = self.store.append_history(summary, session_key=session_key)
-            self.store.append_daily_summary(summary, session_key=session_key, cursor=cursor)
-        return summary
+        with self.store._append_lock:
+            if self.store.generation() != generation:
+                return None
+            if persist and summary != "(nothing)":
+                cursor = self.store.append_history(summary, session_key=session_key)
+                self.store.append_daily_summary(summary, session_key=session_key, cursor=cursor)
+            return summary
 
     async def archive_session(
         self,

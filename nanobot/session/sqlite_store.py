@@ -6,14 +6,19 @@ import sqlite3
 import threading
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import CancelledError
-from contextlib import contextmanager, suppress
+from contextlib import closing, contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar, cast
+from uuid import uuid4
 
 from nanobot.providers.base import ProviderConversationState
 from nanobot.session.display_history import HistoryFact, HistoryImport, HistoryKind, HistoryReader
-from nanobot.session.history_graph import history_record_size
+from nanobot.session.history_graph import (
+    decode_graph_parts,
+    expand_graph_fields,
+    history_record_size,
+)
 from nanobot.session.history_visibility import is_hidden_history_message
 from nanobot.session.manager import (
     Session,
@@ -26,6 +31,8 @@ from nanobot.session.manager import (
 )
 from nanobot.session.summary import is_summary_checkpoint
 from nanobot.session.types import PARENT_SESSION_KEY
+from nanobot.utils.redaction import Redactor
+from nanobot.utils.sqlite_cleanup import vacuum_database
 
 _CHECKPOINT = "runtime_checkpoint"
 _INPUTS = ("pending_user_followups",)
@@ -197,6 +204,7 @@ class SqliteSessionStore:
         try:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA secure_delete = ON")
         except BaseException:
             connection.close()
             raise
@@ -256,6 +264,7 @@ class SqliteSessionStore:
                     "linked to SQLite with JSON enabled"
                 ) from exc
             connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA secure_delete = ON")
         finally:
             connection.close()
         with suppress(OSError):
@@ -337,6 +346,66 @@ class SqliteSessionStore:
                 if not message.get("_command") and not is_summary_checkpoint(message):
                     return True
             return False
+
+    def redact_memory(self, terms: list[str]) -> None:
+        """Scrub this workspace's transcripts and invalidate every old draft."""
+        redact = Redactor(terms)
+        with self.transaction() as db:
+            changed: set[str] = set()
+            for table in ("messages", "checkpoints", "pending_inputs"):
+                for row in db.execute(f"SELECT rowid, session_key, record FROM {table}").fetchall():
+                    record = _object(row["record"])
+                    cleaned = redact.json(record)
+                    if cleaned != record:
+                        changed.add(row["session_key"])
+                        db.execute(f"UPDATE {table} SET record=? WHERE rowid=?", (_encode(cleaned), row["rowid"]))
+            for row in db.execute("SELECT rowid, session_key, record FROM history_entries").fetchall():
+                fact = HistoryFact.decode(row["record"])
+                expanded = expand_graph_fields(fact.content)
+                graph = fact.content.get("context_graph")
+                if isinstance(graph, dict) and cast(dict[str, Any], graph).get("kind") == "context_graph_parts":
+                    expanded["context_graph"] = decode_graph_parts(cast(dict[str, Any], graph))
+                cleaned = redact.json(expanded)
+                # Graph names and paths are display text, not tool identities.
+                for field in ("context_graph", "context_snapshot"):
+                    if field in expanded:
+                        cleaned[field] = redact.json(expanded[field], identifiers=False)
+                if cleaned != expanded:
+                    changed.add(row["session_key"])
+                    record = HistoryFact(
+                        fact.kind, cleaned, fact.turn_id, fact.phase, fact.sequence, fact.created_at_ms,
+                    ).encode()
+                    db.execute("UPDATE history_entries SET record=? WHERE rowid=?", (record, row["rowid"]))
+            # Continuations are opaque provider state: drop them everywhere.
+            db.execute("UPDATE sessions SET provider_state=NULL")
+            for row in db.execute("SELECT key, metadata, title, preview FROM sessions").fetchall():
+                metadata = _object(row["metadata"])
+                values = (redact.json(metadata), redact.text(row["title"]), redact.text(row["preview"]))
+                if row["key"] not in changed and values == (metadata, row["title"], row["preview"]):
+                    continue
+                # Only rewritten sessions get a new generation, so unrelated turns keep running.
+                changed.add(row["key"])
+                db.execute("""UPDATE sessions SET metadata=?, title=?, preview=?,
+                    revision=revision+1, generation=? WHERE key=?""", (
+                    _encode(values[0]), values[1], values[2], uuid4().hex, row["key"],
+                ))
+            for row in db.execute("SELECT session_key, preview, user_preview FROM history_heads").fetchall():
+                if row["session_key"] not in changed:
+                    continue
+                db.execute("""UPDATE history_heads SET preview=?, user_preview=?, revision=revision+1
+                    WHERE session_key=?""", (
+                    redact.text(row["preview"]), redact.text(row["user_preview"]), row["session_key"],
+                ))
+            db.execute("""UPDATE history_turns SET byte_count=(
+                SELECT coalesce(sum(coalesce(json_extract(record, '$.uncompressed_bytes'),
+                    length(CAST(record AS BLOB)))), 0) FROM history_entries
+                WHERE session_key=history_turns.session_key AND turn_ordinal=history_turns.ordinal
+            )""")
+
+    def vacuum(self) -> None:
+        """Run outside transactions; a busy WAL checkpoint is an incomplete cleanup."""
+        with closing(self._open_connection()) as connection:
+            vacuum_database(connection)
 
     @staticmethod
     def _write_metadata(db: sqlite3.Connection, key: str, values: dict[str, Any], *, bump_revision: bool = True) -> None:

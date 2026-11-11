@@ -8,6 +8,9 @@ import threading
 from contextlib import suppress
 from pathlib import Path
 from typing import BinaryIO
+from weakref import WeakValueDictionary
+
+from nanobot.utils.redaction import Redactor
 
 BACKGROUND_LOG_PATH_ENV = "_NANOBOT_BACKGROUND_LOG_PATH"
 BACKGROUND_LOG_MAX_BYTES_ENV = "_NANOBOT_BACKGROUND_LOG_MAX_BYTES"
@@ -15,6 +18,7 @@ BACKGROUND_LOG_BACKUP_COUNT_ENV = "_NANOBOT_BACKGROUND_LOG_BACKUP_COUNT"
 
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 5
+_OUTPUTS: WeakValueDictionary[Path, RotatingTextOutput] = WeakValueDictionary()
 
 
 class RotatingTextOutput(io.TextIOBase):
@@ -28,6 +32,7 @@ class RotatingTextOutput(io.TextIOBase):
         self._handle: BinaryIO | None = None
         self._size = 0
         self._lock = threading.RLock()
+        _OUTPUTS[path.resolve()] = self
 
     @property
     def encoding(self) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -130,6 +135,17 @@ class RotatingTextOutput(io.TextIOBase):
                 self._handle = None
             super().close()
 
+    def scrub(self, redact: Redactor) -> None:
+        """Rewrite retained files while writes are locked, then reopen the live file."""
+        with self._lock:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+            try:
+                _scrub_log_files(self._path, redact)
+            finally:
+                self._ensure_open()
+
     def _ensure_open(self) -> None:
         if self._handle is not None:
             return
@@ -177,6 +193,21 @@ class RotatingTextOutput(io.TextIOBase):
 
     def _backup_path(self, index: int) -> Path:
         return self._path.with_name(f"{self._path.name}.{index}")
+
+
+def _scrub_log_files(path: Path, redact: Redactor) -> None:
+    # Glob rotated copies: a lowered backup count leaves older numbered files behind.
+    for item in (path, *path.parent.glob(f"{path.name}.[0-9]*")):
+        if item.exists():
+            redact.scrub_lines(item)
+
+
+def scrub_log(path: Path, redact: Redactor) -> None:
+    output = _OUTPUTS.get(path.resolve())
+    if output is not None and not output.closed:
+        output.scrub(redact)
+    else:
+        _scrub_log_files(path, redact)
 
 
 def _positive_int(value: str | None, default: int, *, minimum: int) -> int:

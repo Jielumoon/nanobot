@@ -372,10 +372,11 @@ class ClaimStore:
             while True:
                 before = (len(ids), len(terms), len(sources))
                 folded = [term.casefold() for term in terms]
-                sources.update(
-                    source for line, source in history_lines
-                    if any(term in line.text.casefold() for term in folded)
-                )
+                for line, source in history_lines:
+                    if any(term in line.text.casefold() for term in folded):
+                        sources.add(source)
+                    elif source in sources:
+                        terms.add(line.text)
                 discovered: set[str] = set()
                 for line, claim, markers in lines:
                     haystack = line_text(line.text)
@@ -439,6 +440,11 @@ class ClaimStore:
                     if claim is None:
                         removed.append(LineMatch(line.path, line.line, line.text.strip()))
             history_ids = sorted({line.line for line, source in history_lines if source in sources})
+            if not events:
+                # A query can match only a session copy; it still invalidates
+                # summaries and provider continuations captured before this request.
+                # Never hash the term itself: short terms are trivially reversible.
+                tombstone("chunk", uuid4().hex, None)
             # A failed cleanup still leaves a durable recall barrier.
             self.documents.append_events(events)
             changes: dict[str, str] = {}

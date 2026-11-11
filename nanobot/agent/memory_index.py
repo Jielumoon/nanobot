@@ -29,6 +29,7 @@ from nanobot.agent.memory_documents import (
     marked_claim_ids,
     utc_now,
 )
+from nanobot.utils.sqlite_cleanup import vacuum_database
 
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]+")
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
@@ -132,6 +133,7 @@ class MemoryIndex:
         with closing(sqlite3.connect(self.db_path, timeout=10)) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA secure_delete = ON")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version in {0, 1, 2}:
                 self._initialize(conn)
@@ -142,6 +144,14 @@ class MemoryIndex:
             ).fetchone() is not None
             with conn:
                 yield conn
+
+    def purge_deleted(self) -> None:
+        """Rebuild FTS segments and reclaim deleted content outside transactions."""
+        with self.connect() as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='memory_fts'").fetchone():
+                conn.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
+            conn.commit()
+            vacuum_database(conn)
 
     def _initialize(self, conn: sqlite3.Connection) -> None:
         # Every version is a disposable projection. Rebuild old schemas from
