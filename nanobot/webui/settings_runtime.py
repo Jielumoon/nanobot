@@ -29,6 +29,7 @@ RUNTIME_CONFIG_PATHS = (
     "agents.defaults.tool_hint_max_length",
     "agents.defaults.dream.enabled",
     "agents.defaults.memory.claims_enabled",
+    "agents.defaults.memory.daily_notes",
     "agents.defaults.memory.people.enabled",
     "agents.defaults.memory.embedding.enabled",
     "gateway.host",

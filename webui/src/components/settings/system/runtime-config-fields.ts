@@ -34,6 +34,7 @@ export const RUNTIME_CONFIG_FIELDS: RuntimeConfigField[] = [
   { group: "identity", path: "agents.defaults.timezone", kind: "text", when: { path: "agents.defaults.timezone_mode", value: "manual" } },
   { group: "memory", path: "agents.defaults.dream.enabled", kind: "boolean" },
   { group: "memory", path: "agents.defaults.memory.claims_enabled", kind: "boolean" },
+  { group: "memory", path: "agents.defaults.memory.daily_notes", kind: "boolean" },
   { group: "memory", path: "agents.defaults.memory.people.enabled", kind: "boolean" },
   { group: "memory", path: "agents.defaults.memory.embedding.enabled", kind: "boolean" },
   { group: "execution", path: "agents.defaults.provider_retry_mode", kind: "toggle", options: ["standard", "persistent"] },

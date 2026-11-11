@@ -18,6 +18,7 @@ function runtimeSettings() {
     "agents.defaults.timezone": "UTC",
     "agents.defaults.dream.enabled": true,
     "agents.defaults.memory.claims_enabled": true,
+    "agents.defaults.memory.daily_notes": true,
     "agents.defaults.memory.people.enabled": true,
     "agents.defaults.memory.embedding.enabled": false,
     "agents.defaults.session_ttl_minutes": 15,
@@ -78,6 +79,7 @@ describe("Runtime configuration settings", () => {
   it.each([
     ["Memory consolidation", "agents.defaults.dream.enabled", false],
     ["Structured memory", "agents.defaults.memory.claims_enabled", false],
+    ["Daily summaries", "agents.defaults.memory.daily_notes", false],
     ["People memory", "agents.defaults.memory.people.enabled", false],
     ["Semantic search", "agents.defaults.memory.embedding.enabled", true],
   ] as const)("saves only the changed %s switch", async (label, path, enabled) => {
@@ -85,15 +87,17 @@ describe("Runtime configuration settings", () => {
     requestMutationMock.mockResolvedValue({ ...payload, runtime_config: {
       ...payload.runtime_config, [path]: enabled,
     } });
-    renderSettingsView({ initialSection: "memory", initialSettings: payload });
-    const memory = within(screen.getByRole("region", { name: "Memory consolidation" }));
-    expect(memory.getAllByRole("switch")).toHaveLength(4);
+    renderSettingsView({ initialSection: "runtime", initialSettings: payload });
+    fireEvent.click(screen.getByRole("button", { name: "Capabilities" }));
+    const memory = within(screen.getByRole("region", { name: "Memory" }));
+    expect(memory.getAllByRole("switch")).toHaveLength(5);
     fireEvent.click(screen.getByRole("switch", { name: label }));
     await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
       "settings.runtime_config.update", { values: { [path]: enabled } }, 20_000,
     ));
     await waitFor(() => expect(screen.getByRole("switch", { name: label }))
       .toHaveAttribute("aria-checked", String(enabled)));
+    expect(memory.getAllByRole("switch")).toHaveLength(5);
   });
 
   it("keeps older hosts' supported memory switch usable", async () => {
@@ -103,7 +107,7 @@ describe("Runtime configuration settings", () => {
       "agents.defaults.dream.enabled": false,
     } });
     renderSettingsView({ initialSection: "memory", initialSettings: payload });
-    expect(within(screen.getByRole("region", { name: "Memory consolidation" }))
+    expect(within(screen.getByRole("region", { name: "Memory" }))
       .getAllByRole("switch")).toHaveLength(1);
     fireEvent.click(screen.getByRole("switch", { name: "Memory consolidation" }));
     await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(

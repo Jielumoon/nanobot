@@ -562,6 +562,10 @@
           "label": "结构记忆",
           "help": "启用记忆工具与分类存储；关闭后保留已有文件。"
         },
+        "agents_defaults_memory_daily_notes": {
+          "label": "每日摘要",
+          "help": "按日期保存对话摘要；关闭后保留已有文件。"
+        },
         "agents_defaults_memory_people_enabled": {
           "label": "人物记忆",
           "help": "只记录有证据的信息，提到该人物时召回；需开启结构记忆。"

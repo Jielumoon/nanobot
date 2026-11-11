@@ -255,6 +255,7 @@ def test_disabling_memory_consolidation_preserves_other_memory_settings():
 
 @pytest.mark.parametrize(("key", "default"), [
     ("agents.defaults.memory.claims_enabled", True),
+    ("agents.defaults.memory.daily_notes", True),
     ("agents.defaults.memory.people.enabled", True),
     ("agents.defaults.memory.embedding.enabled", False),
 ])
@@ -328,6 +329,7 @@ def test_proxy_update_skips_embedding_validation_when_claims_are_disabled(tmp_pa
 
 @pytest.mark.parametrize("key", [
     "agents.defaults.memory.claims_enabled",
+    "agents.defaults.memory.daily_notes",
     "agents.defaults.memory.people.enabled",
     "agents.defaults.memory.embedding.enabled",
 ])

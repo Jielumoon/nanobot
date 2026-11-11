@@ -549,6 +549,7 @@
         "agents_defaults_timezone_mode": {"label": "系統時區", "help": "關閉後可手動指定時區"},
         "agents_defaults_timezone": {"label": "時區", "help": "UTC 偏移按當前日期顯示"},
         "agents_defaults_memory_claims_enabled": {"label": "結構記憶", "help": "啟用記憶工具與分類儲存；關閉後保留現有檔案。"},
+        "agents_defaults_memory_daily_notes": {"label": "每日摘要", "help": "按日期儲存對話摘要；關閉後保留現有檔案。"},
         "agents_defaults_memory_people_enabled": {"label": "人物記憶", "help": "只記錄有證據的資訊，提到該人物時召回；需啟用結構記憶。"},
         "agents_defaults_memory_embedding_enabled": {"label": "語意檢索", "help": "使用已設定的向量服務，可能產生 API 費用。Dream 分批產生向量，服務失敗時仍可使用關鍵字搜尋。"},
         "agents_defaults_dream_enabled": {"label": "記憶整理", "help": "自動整理記憶；關閉後仍可用已有記憶\n\n自動整理對話中的有用資訊。關閉後停止整理，已有記憶仍可使用。"},

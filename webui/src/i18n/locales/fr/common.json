@@ -549,6 +549,7 @@
         "agents_defaults_timezone_mode": {"label": "Fuseau système", "help": "Désactivez pour choisir un fuseau horaire.\n\nDésactivez pour choisir le fuseau horaire manuellement."},
         "agents_defaults_timezone": {"label": "Fuseau horaire", "help": "Les décalages UTC utilisent la date actuelle.\n\nChoisissez un fuseau horaire. Le décalage UTC correspond à la date actuelle."},
         "agents_defaults_memory_claims_enabled": {"label": "Mémoire structurée", "help": "Activer les outils de mémoire et le stockage par catégorie. La désactivation conserve les fichiers existants."},
+        "agents_defaults_memory_daily_notes": {"label": "Résumés quotidiens", "help": "Enregistrer les résumés des conversations par date. La désactivation conserve les fichiers existants."},
         "agents_defaults_memory_people_enabled": {"label": "Mémoire des personnes", "help": "Conserver des informations étayées et les rappeler quand une personne est mentionnée. Nécessite la mémoire structurée."},
         "agents_defaults_memory_embedding_enabled": {"label": "Recherche sémantique", "help": "Utiliser le fournisseur de vecteurs configuré ; des frais API peuvent s’appliquer. Dream crée les vecteurs par lots. La recherche par mots-clés reste disponible en cas d’échec."},
         "agents_defaults_dream_enabled": {"label": "Consolidation de la mémoire", "help": "Organisez la mémoire automatiquement ; la désactivation conserve les souvenirs existants.\n\nOrganise les informations utiles des conversations. La mémoire existante reste disponible après désactivation."},

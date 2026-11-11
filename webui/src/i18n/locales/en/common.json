@@ -562,6 +562,10 @@
           "label": "Structured memory",
           "help": "Enable memory tools and categorized storage. Turning this off keeps existing files."
         },
+        "agents_defaults_memory_daily_notes": {
+          "label": "Daily summaries",
+          "help": "Save conversation summaries by date. Turning this off keeps existing files."
+        },
         "agents_defaults_memory_people_enabled": {
           "label": "People memory",
           "help": "Save evidence-backed information and recall it when a person is mentioned. Requires structured memory."

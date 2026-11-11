@@ -549,6 +549,7 @@
         "agents_defaults_timezone_mode": {"label": "시스템 시간대", "help": "끄면 시간대를 직접 선택할 수 있습니다."},
         "agents_defaults_timezone": {"label": "시간대", "help": "UTC 오프셋은 오늘 날짜를 기준으로 합니다.\n\n시간대를 선택하세요. UTC 시차는 현재 날짜를 기준으로 표시됩니다."},
         "agents_defaults_memory_claims_enabled": {"label": "구조화된 기억", "help": "기억 도구와 분류별 저장을 사용합니다. 꺼도 기존 파일은 유지됩니다."},
+        "agents_defaults_memory_daily_notes": {"label": "일일 요약", "help": "대화 요약을 날짜별로 저장합니다. 꺼도 기존 파일은 유지됩니다."},
         "agents_defaults_memory_people_enabled": {"label": "인물 기억", "help": "근거가 있는 정보를 저장하고 해당 인물이 언급될 때 불러옵니다. 구조화된 기억이 필요합니다."},
         "agents_defaults_memory_embedding_enabled": {"label": "의미 검색", "help": "설정된 임베딩 제공업체를 사용하며 API 요금이 발생할 수 있습니다. Dream이 벡터를 나누어 생성합니다. 서비스 오류 시에도 키워드 검색은 유지됩니다."},
         "agents_defaults_dream_enabled": {"label": "기억 정리", "help": "메모리를 자동 정리합니다. 꺼도 기존 메모리는 유지됩니다.\n\n대화의 유용한 정보를 자동으로 정리합니다. 꺼도 기존 기억은 계속 사용합니다."},

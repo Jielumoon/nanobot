@@ -549,6 +549,7 @@
         "agents_defaults_timezone_mode": {"label": "Múi giờ hệ thống", "help": "Tắt để chọn múi giờ.\n\nTắt để chọn múi giờ thủ công."},
         "agents_defaults_timezone": {"label": "Múi giờ", "help": "Độ lệch UTC theo ngày hiện tại.\n\nChọn múi giờ. Độ lệch UTC được tính theo ngày hiện tại."},
         "agents_defaults_memory_claims_enabled": {"label": "Bộ nhớ có cấu trúc", "help": "Bật công cụ bộ nhớ và lưu trữ theo nhóm. Tắt tính năng vẫn giữ các tệp hiện có."},
+        "agents_defaults_memory_daily_notes": {"label": "Tóm tắt hằng ngày", "help": "Lưu bản tóm tắt cuộc trò chuyện theo ngày. Tắt tính năng vẫn giữ các tệp hiện có."},
         "agents_defaults_memory_people_enabled": {"label": "Bộ nhớ về người", "help": "Lưu thông tin có bằng chứng và truy xuất khi người đó được nhắc đến. Cần bật bộ nhớ có cấu trúc."},
         "agents_defaults_memory_embedding_enabled": {"label": "Tìm kiếm ngữ nghĩa", "help": "Dùng nhà cung cấp vectơ đã cấu hình; có thể phát sinh phí API. Dream tạo vectơ theo lô. Tìm kiếm từ khóa vẫn hoạt động khi dịch vụ lỗi."},
         "agents_defaults_dream_enabled": {"label": "Sắp xếp bộ nhớ", "help": "Tự động sắp xếp bộ nhớ; tắt vẫn giữ bộ nhớ có sẵn.\n\nTự động sắp xếp thông tin hữu ích từ cuộc trò chuyện. Bộ nhớ hiện có vẫn được sử dụng khi tắt."},
