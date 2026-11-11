@@ -195,7 +195,10 @@ def update_runtime_config(
             validated.network.resolve_proxy(True)
         except ValueError as exc:
             raise WebUISettingsError(str(exc)) from None
-    if validated.agents.defaults.memory.embedding.enabled and (
+    if (
+        validated.agents.defaults.memory.embedding.enabled
+        and validated.agents.defaults.memory.claims_enabled
+    ) and (
         {"agents.defaults.memory.embedding.enabled", "agents.defaults.memory.claims_enabled",
          "network.proxy"} & values.keys()
     ):

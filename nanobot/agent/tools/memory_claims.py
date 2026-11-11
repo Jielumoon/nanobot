@@ -165,6 +165,8 @@ class MemoryRememberTool(_MemoryClaimTool):
         if aliases and person is None:
             return ToolResult.error("aliases 需要同时提供 person")
         ctx = current_request_context()
+        if self._dream is None and ctx is not None and not ctx.persist_session:
+            return ToolResult.error("临时会话不能写入长期记忆")
         session_key = ctx.session_key if ctx is not None else None
         try:
             draft = ClaimDraft.model_validate({
@@ -367,12 +369,21 @@ class MemoryForgetTool(_MemoryClaimTool):
                     for item in result.candidates
                 ],
             })
+        if result.retracted and not result.redact_terms and not needle:
+            return ToolResult.error(_dump({
+                "status": "partial",
+                "message": "记忆已撤回，但无法恢复副本清理所需的脱敏词；请使用原文关键词重试。",
+                "incomplete": ["本地副本及会话数据库清理未确认"],
+            }))
         completed = ["受管记忆文件、历史摘要及记忆索引物理清理"]
         pending: list[str] = []
         uncovered = ["记忆 Git 历史及其他未覆盖副本（详见 docs/memory.md）"]
         if self._sessions is not None:
             context = current_request_context()
-            if context is not None and context.session_key is not None:
+            if (
+                context is not None and context.session_key is not None
+                and context.persist_session
+            ):
                 self._sessions.state.request_memory_forget(context.session_key, result.redact_terms)
                 pending.append("sessions.sqlite3：本轮提交后脱敏并执行 VACUUM/WAL 清理")
             else:

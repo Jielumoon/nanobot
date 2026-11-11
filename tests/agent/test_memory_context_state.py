@@ -51,6 +51,25 @@ def test_compaction_rebuild_refreshes_cached_memory_view_after_forget(tmp_path):
     assert "继续整理报告" in rebuilt[0]["content"]
 
 
+def test_non_memory_transcript_omits_user_and_dynamic_memory(tmp_path):
+    builder = ContextBuilder(tmp_path)
+    builder.memory.write_user("持久用户资料标记")
+    builder.memory.claims.remember(ClaimDraft(
+        text="每周检查备份计划", kind="commitment",
+    ))
+    view = builder.memory.prompt_view("备份")
+    assert "持久用户资料标记" in view.user
+    assert view.runtime is not None and "每周检查备份计划" in view.runtime.content
+
+    messages = builder.build_transcript(
+        TranscriptInput(history=[], current_message="检查一下", memory_view=view),
+        include_memory=False,
+    )
+
+    assert "持久用户资料标记" not in str(messages)
+    assert "每周检查备份计划" not in str(messages)
+
+
 @pytest.mark.parametrize("path", [
     "budget-finalization", "empty-finalization", "malformed-retry", "malformed-fallback",
 ])

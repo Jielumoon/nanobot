@@ -833,7 +833,10 @@ class AgentLoop:
         request: RequestContext,
         tools: ToolRegistry,
     ) -> list[RuntimeContextBlock]:
-        if request.memory_view is None and self.context.memory.claims is not None:
+        if (
+            request.persist_session and request.memory_view is None
+            and self.context.memory.claims is not None
+        ):
             query = request.original_user_text or ""
             semantic = await self.context.memory.query_embedding(query[:2000])
             view = await self.runner.prepare_prompt(

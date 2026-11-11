@@ -50,6 +50,8 @@ class MemoryRuntimeContext:
         self.claims = claims
 
     async def provide(self, request: RequestContext) -> RuntimeContextBlock | None:
+        if not request.persist_session:
+            return None
         if request.memory_view is not None:
             return request.memory_view.runtime
         query = request.original_user_text or ""

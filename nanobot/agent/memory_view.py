@@ -68,15 +68,15 @@ class MemoryReadView:
             markers = marked_claim_ids(raw)
             if any(("claim", claim_id) in self.tombstones for claim_id in markers):
                 continue
-            if ("chunk", digest(line_text(raw))) in self.tombstones and not markers:
-                continue
             claim = decode_claim(raw, path, number, issues=set())
+            if claim is None and ("chunk", digest(line_text(raw))) in self.tombstones:
+                continue
             if claim is not None and any(
                 ("entity", entity_id) in self.tombstones
                 for entity_id in (claim.person_id, claim.project_id)
             ):
                 continue
-            kept.append((number, strip_claim_markers(raw)))
+            kept.append((number, f"- {claim.text}" if claim is not None else strip_claim_markers(raw)))
         return kept
 
     def people(self) -> list[Entity]:

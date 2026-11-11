@@ -114,9 +114,11 @@ class ContextBuilder:
         root = workspace or self.workspace
         parts = [self._get_identity(channel=channel, workspace=root)]
 
-        if memory_view is None and self.memory.claims is not None:
+        if include_memory and memory_view is None and self.memory.claims is not None:
             memory_view = self.memory.prompt_view()
-        bootstrap = self._load_bootstrap_files(root, memory_view=memory_view)
+        bootstrap = self._load_bootstrap_files(
+            root, memory_view=memory_view, include_memory=include_memory,
+        )
         if bootstrap:
             parts.append(bootstrap)
 
@@ -212,6 +214,7 @@ class ContextBuilder:
 
     def _load_bootstrap_files(
         self, workspace: Path | None = None, *, memory_view: PromptMemory | None = None,
+        include_memory: bool = True,
     ) -> str:
         parts: list[str] = []
         project_root = workspace or self.workspace
@@ -222,6 +225,8 @@ class ContextBuilder:
         ]
 
         for filename, root in sources:
+            if filename == "USER.md" and not include_memory:
+                continue
             file_path = root / filename
             if file_path.exists():
                 content = (
@@ -313,8 +318,8 @@ class ContextBuilder:
     ) -> list[dict[str, Any]]:
         """Build a model transcript while preserving the fresh-turn boundary."""
         root = workspace or self.workspace
-        memory_view = transcript.memory_view
-        if self.memory.claims is not None and (
+        memory_view = transcript.memory_view if include_memory else None
+        if include_memory and self.memory.claims is not None and (
             memory_view is None or memory_view.generation != self.memory.generation()
         ):
             query = transcript.current_message if transcript.current_role == "user" else None
@@ -336,9 +341,11 @@ class ContextBuilder:
                 return messages
 
             blocks = list(transcript.runtime_context_blocks or ())
-            if memory_view is not None and memory_view.runtime is not None:
+            if include_memory and memory_view is not None and memory_view.runtime is not None:
                 blocks = [block for block in blocks if block.source != "memory_recall"]
                 blocks.append(memory_view.runtime)
+            elif not include_memory:
+                blocks = [block for block in blocks if block.source != "memory_recall"]
             current = self.build_current_message(
                 transcript.current_message,
                 media=list(transcript.media) if transcript.media else None,

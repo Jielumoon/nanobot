@@ -312,6 +312,20 @@ def test_memory_embedding_setting_validates_only_selected_provider(tmp_path, mon
     assert load_config(path).agents.defaults.memory.embedding.enabled
 
 
+def test_proxy_update_skips_embedding_validation_when_claims_are_disabled(tmp_path):
+    path = tmp_path / "config.json"
+    config = Config()
+    config.agents.defaults.memory.claims_enabled = False
+    config.agents.defaults.memory.embedding.enabled = True
+    save_config(config, path)
+
+    payload = update_runtime_config_settings({
+        "network.proxy": "http://proxy.example:7890",
+    }, config_path=path)
+
+    assert payload["runtime_config"]["network.proxy"] == "http://proxy.example:7890"
+
+
 @pytest.mark.parametrize("key", [
     "agents.defaults.memory.claims_enabled",
     "agents.defaults.memory.people.enabled",

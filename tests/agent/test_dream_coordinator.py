@@ -224,6 +224,22 @@ async def test_dream_commit_failure_keeps_batch_pending(store: MemoryStore, monk
     assert store.get_last_dream_cursor() == 1
 
 
+async def test_dream_advances_completed_cursor_when_cleanup_fails(
+    store: MemoryStore, monkeypatch,
+) -> None:
+    store.append_history("已完成但本地清理失败")
+
+    def fail_compaction():
+        raise OSError("清理失败")
+
+    monkeypatch.setattr(store, "compact_history", fail_compaction)
+    with pytest.raises(OSError, match="清理失败"):
+        await run_dream(agent_for(store), trigger="manual")
+
+    assert store.get_last_dream_cursor() == 1
+    assert "状态=完成" in store.dreams.path().read_text()
+
+
 async def test_dream_without_history_expires_and_reconciles(
     store: MemoryStore, claims: ClaimStore,
 ) -> None:

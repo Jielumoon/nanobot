@@ -65,6 +65,8 @@ async def test_transient_session_keeps_history_without_persisting_or_durable_too
         ),
     )
     key = f"websocket:{await temporary_chats.create(object(), trusted_webui=True)}"
+    session = loop.sessions.get_cached(key)
+    assert session is not None and "memory_remember" in session.policy.disabled_tools
 
     await loop._process_message(_message(key, "first question"))
     await loop._process_message(_message(key, "second question"))

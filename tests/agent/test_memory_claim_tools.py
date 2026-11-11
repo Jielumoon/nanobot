@@ -62,6 +62,22 @@ async def test_remember_tool_records_turn_provenance(tmp_path):
     )
 
 
+async def test_remember_tool_rejects_temporary_session(tmp_path):
+    store = _store(tmp_path)
+    context = RequestContext(
+        channel="websocket", chat_id="temporary", session_key="websocket:temporary",
+        persist_session=False,
+    )
+
+    with request_context(context):
+        result = await MemoryRememberTool(store).execute(
+            text="临时会话中的长期记忆", kind="fact",
+        )
+
+    assert result.is_error
+    assert not store.claims.search("临时会话中的长期记忆")
+
+
 async def test_remember_tool_rejects_unknown_kind(tmp_path):
     result = await MemoryRememberTool(_store(tmp_path)).execute(text="x", kind="mood")
 
@@ -86,6 +102,24 @@ async def test_forget_tool_redacts_history_journal(tmp_path):
     assert "Luna" not in contents[0] and "[已遗忘]" in contents[0]
     assert contents[1] == "- [durable] 部署在 1 核 1G 机器"
     assert "Luna" not in store.read_memory()
+
+
+def test_forgotten_cited_claim_stays_hidden_after_plain_text_restore(tmp_path):
+    store = _store(tmp_path)
+    text = "迁移后保留的备份位置"
+    saved = store.claims.remember(
+        ClaimDraft(text=text, kind="fact", core=True),
+        session_key="cli:chat", message_id="m-1", source_ref="session:cli:chat#m-1",
+    )
+    path = tmp_path / saved.claim.source_file
+    assert "session:cli:chat#m-1" in path.read_text()
+    assert "session:cli:chat#m-1" not in store.prompt_view().user
+
+    store.forget_memory(claim_ids=[saved.claim.claim_id])
+    path.write_text(f"- {text}\n", encoding="utf-8")
+    store.reconcile_files()
+
+    assert text not in store.prompt_view().user
 
 
 async def test_forget_tool_reports_ambiguous_query(tmp_path):

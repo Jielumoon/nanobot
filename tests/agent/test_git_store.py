@@ -33,6 +33,29 @@ class TestInit:
     def test_init_idempotent(self, git_ready):
         assert not git_ready.init()
 
+    def test_does_not_take_over_existing_user_repository(self, tmp_path):
+        from dulwich import porcelain
+
+        porcelain.init(str(tmp_path))
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("/private-user-pattern\n", encoding="utf-8")
+        git = GitStore(tmp_path, tracked_files=TRACKED)
+
+        assert not git.init()
+        assert gitignore.read_text(encoding="utf-8") == "/private-user-pattern\n"
+        assert not git.is_initialized()
+        assert git.auto_commit("must not commit user files") is None
+
+    def test_recognizes_legacy_nanobot_repository(self, git_ready):
+        marker = git_ready._workspace / ".git/nanobot-memory-store"
+        marker.unlink()
+        gitignore = git_ready._workspace / ".gitignore"
+        gitignore.write_text(gitignore.read_text() + "!user-custom-pattern\n")
+        reopened = GitStore(git_ready._workspace, tracked_files=TRACKED)
+
+        assert reopened.is_initialized()
+        assert not reopened.init()
+
     def test_init_creates_gitignore(self, git_ready):
         gi = git_ready._workspace / ".gitignore"
         assert gi.exists()

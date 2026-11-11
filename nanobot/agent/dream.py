@@ -74,12 +74,14 @@ async def run_dream(
                     status = "incomplete"
                     reason = MemoryStore.dream_incompletion_reason(response)
         finally:
-            store.compact_history()
-            await agent.sessions.state.prune_dream_sessions()
-            await store.backfill_embeddings()
-            changed, sha = store.finish_dream(
-                run_id=run_id, status=status, cursor=cursor, prefix=prefix,
-            )
+            try:
+                store.compact_history()
+                await agent.sessions.state.prune_dream_sessions()
+                await store.backfill_embeddings()
+            finally:
+                changed, sha = store.finish_dream(
+                    run_id=run_id, status=status, cursor=cursor, prefix=prefix,
+                )
         return DreamResult(status, time.monotonic() - started, cursor, changed, sha, reason)
     finally:
         release_memory_operation(workspace)

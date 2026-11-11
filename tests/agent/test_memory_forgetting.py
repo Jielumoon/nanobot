@@ -1,17 +1,20 @@
 import asyncio
 import json
 import sqlite3
+import threading
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from nanobot.agent.memory import MemoryArchiver, MemoryStore
 from nanobot.agent.memory_documents import ClaimDraft
+from nanobot.agent.tools.context import RequestContext, request_context
 from nanobot.agent.tools.memory_claims import MemoryForgetTool
 from nanobot.config.schema import MemoryConfig
 from nanobot.providers.base import GenerationSettings, LLMProvider, LLMResponse
 from nanobot.session.manager import SessionManager
 from nanobot.utils.llm_runtime import LLMRuntime
+from nanobot.utils.redaction import Redactor
 from nanobot.utils.rotating_output import RotatingTextOutput
 
 
@@ -120,7 +123,12 @@ async def test_forget_cleans_all_supported_local_files_and_reopens_active_log(tm
             assert "保留行" in path.read_text(encoding="utf-8")
         assert (data / "logs/gateway.log").read_text(encoding="utf-8").endswith("后续日志\n")
         for path in jsonl_paths:
-            assert [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line] == [kept]
+            records = [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line]
+            assert records[0]["content"] == "[已遗忘]"
+            assert json.loads(records[1]["tool_calls"][0]["function"]["arguments"]) == {
+                "query": "[已遗忘]",
+            }
+            assert records[2] == kept
         for path in checkpoints:
             assert json.loads(path.read_text()) == {"checkpoint": {"content": "[已遗忘]"}, "version": 1}
     finally:
@@ -140,6 +148,136 @@ async def test_file_cleanup_error_is_reported_as_partial(tmp_path, monkeypatch):
     assert payload["status"] == "partial" and payload["completed"] and payload["incomplete"]
     assert path.read_text() == '{"content":'
     assert store.claims.get(saved.claim.claim_id).status == "retracted"
+    retry = await MemoryForgetTool(store).execute(claim_ids=[saved.claim.claim_id])
+    assert retry.is_error and json.loads(retry)["status"] == "partial"
+
+
+def test_redaction_replaces_only_matching_text(tmp_path):
+    path = tmp_path / "history.md"
+    path.write_text("book contains a secret phrase; keep this line\n")
+
+    Redactor(["secret"]).scrub_lines(path)
+
+    assert path.read_text() == "book contains a [已遗忘] phrase; keep this line\n"
+
+
+def test_redaction_does_not_match_ascii_words_inside_other_words(tmp_path):
+    path = tmp_path / "history.md"
+    path.write_text("book is available; status is ok\n")
+
+    Redactor(["ok"]).scrub_lines(path)
+
+    assert path.read_text() == "book is available; status is [已遗忘]\n"
+
+
+async def test_forget_rejects_session_directory_symlink(tmp_path):
+    workspace = tmp_path / "workspace"
+    external = tmp_path / "external"
+    external.mkdir()
+    file = external / "history.jsonl"
+    file.write_text('{"content":"secret phrase"}\n')
+    workspace.mkdir()
+    (workspace / "sessions").symlink_to(external, target_is_directory=True)
+    store = MemoryStore(workspace)
+
+    result = await MemoryForgetTool(store).execute(query="secret phrase")
+
+    assert result.is_error and json.loads(result)["status"] == "partial"
+    assert file.read_text() == '{"content":"secret phrase"}\n'
+
+
+async def test_forget_in_temporary_session_redacts_immediately(tmp_path, monkeypatch):
+    workspace, data = tmp_path / "workspace", tmp_path / "data"
+    sessions = SessionManager(workspace, sessions_root=data / "sessions")
+    monkeypatch.setattr("nanobot.agent.memory_forgetting.get_data_dir", lambda: data)
+    monkeypatch.setattr("nanobot.agent.memory_forgetting.get_cli_history_path", lambda: tmp_path / "cli_history")
+    state = sessions.state
+    key = "websocket:temporary-forget"
+    secret = "transient-forget-secret"
+    session = await state.get(key)
+    session.add_message("user", secret)
+    await state.finish_turn(session)
+    try:
+        context = RequestContext(
+            channel="websocket", chat_id="temporary", session_key=key, persist_session=False,
+        )
+        with request_context(context):
+            result = json.loads(await MemoryForgetTool(
+                MemoryStore(workspace), sessions=sessions,
+            ).execute(query=secret))
+        assert result["status"] == "forgotten" and not result["pending"]
+        updated = await state.get(key)
+        assert secret not in json.dumps(updated.messages)
+    finally:
+        await state.aclose()
+
+
+async def test_concurrent_forgets_serialize_local_file_rewrites(tmp_path, monkeypatch):
+    from nanobot.agent import memory_forgetting
+
+    workspace, data = tmp_path / "workspace", tmp_path / "data"
+    (workspace / "sessions").mkdir(parents=True)
+    path = workspace / "sessions/history.jsonl"
+    path.write_text('{"content":"alpha-secret beta-secret"}\n')
+    monkeypatch.setattr(memory_forgetting, "get_data_dir", lambda: data)
+    monkeypatch.setattr(memory_forgetting, "get_cli_history_path", lambda: tmp_path / "cli_history")
+    first_entered, release_first = threading.Event(), threading.Event()
+    second_entered, second_started = threading.Event(), threading.Event()
+    calls_lock = threading.Lock()
+    calls = 0
+    original = memory_forgetting._scrub_jsonl
+
+    def pause_first(path, redactor):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+            number = calls
+        if number == 1:
+            first_entered.set()
+            assert release_first.wait(2)
+        else:
+            second_entered.set()
+        original(path, redactor)
+
+    monkeypatch.setattr(memory_forgetting, "_scrub_jsonl", pause_first)
+
+    def scrub(terms):
+        if terms[0] == "beta-secret":
+            second_started.set()
+        return memory_forgetting.scrub_local_copies(workspace, None, terms)
+
+    first = asyncio.create_task(asyncio.to_thread(scrub, ["alpha-secret"]))
+    assert await asyncio.to_thread(first_entered.wait, 2)
+    second = asyncio.create_task(asyncio.to_thread(scrub, ["beta-secret"]))
+    assert await asyncio.to_thread(second_started.wait, 2)
+    try:
+        entered_while_first_was_paused = await asyncio.to_thread(second_entered.wait, 0.1)
+    finally:
+        release_first.set()
+    await asyncio.gather(first, second)
+
+    assert not entered_while_first_was_paused
+    assert "alpha-secret" not in path.read_text()
+    assert "beta-secret" not in path.read_text()
+
+
+async def test_forget_rejects_webui_segment_directory_symlink(tmp_path, monkeypatch):
+    from nanobot.agent import memory_forgetting
+
+    workspace, data, external = (tmp_path / name for name in ("workspace", "data", "external"))
+    external.mkdir()
+    file = external / "history.jsonl"
+    file.write_text('{"content":"secret phrase"}\n')
+    webui = data / "webui"
+    webui.mkdir(parents=True)
+    (webui / "chat.segments").symlink_to(external, target_is_directory=True)
+    monkeypatch.setattr(memory_forgetting, "get_data_dir", lambda: data)
+    monkeypatch.setattr(memory_forgetting, "get_cli_history_path", lambda: tmp_path / "cli_history")
+
+    with pytest.raises(ValueError, match="符号链接"):
+        await asyncio.to_thread(memory_forgetting.scrub_local_copies, workspace, None, ["secret phrase"])
+
+    assert file.read_text() == '{"content":"secret phrase"}\n'
 
 
 

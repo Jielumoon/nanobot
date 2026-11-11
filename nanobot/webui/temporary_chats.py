@@ -22,6 +22,7 @@ _TEMPORARY_CHAT_DISABLED_TOOLS = frozenset({
     "update_goal",
     "subagent",
     "cron",
+    "memory_remember",
 })
 _TEMPORARY_CHAT_COMMANDS = frozenset({"/model", "/stop"})
 

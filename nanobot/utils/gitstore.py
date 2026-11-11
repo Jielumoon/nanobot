@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 # are tiny in practice, but a pathological rewrite must not blow up the audit
 # record. The structured per-file summary is always emitted in full regardless.
 _WORKING_TREE_DIFF_MAX_CHARS = 6000
+_MEMORY_REPO_MARKER = ".git/nanobot-memory-store"
 
 
 class GitStoreError(RuntimeError):
@@ -60,10 +61,14 @@ class GitStore:
         # dated memory notes.
         self._tracked_dirs = list(tracked_dirs or [])
         self._restore_excluded = set(restore_excluded or [])
+        self._ownership_cache: bool | None = None
 
     def is_initialized(self) -> bool:
-        """Check if the git repo has been initialized."""
-        return (self._workspace / ".git").is_dir()
+        """Check whether Nanobot owns the Git repo at this workspace root."""
+        if self._ownership_cache is None:
+            marker = self._workspace / _MEMORY_REPO_MARKER
+            self._ownership_cache = marker.is_file() or self._is_legacy_memory_repo()
+        return self._ownership_cache
 
 
     def init(self) -> bool:
@@ -74,6 +79,9 @@ class GitStore:
         """
         if self.is_initialized():
             self._update_gitignore()
+            return False
+
+        if (self._workspace / ".git").is_dir():
             return False
 
         if self._is_inside_git_repo():
@@ -107,6 +115,8 @@ class GitStore:
                 author=b"nanobot <nanobot@dream>",
                 committer=b"nanobot <nanobot@dream>",
             )
+            atomic_write_text(self._workspace / _MEMORY_REPO_MARKER, "nanobot memory store\n")
+            self._ownership_cache = True
             logger.debug("Git store initialized at {}", self._workspace)
             return True
         except Exception as exc:
@@ -252,6 +262,35 @@ class GitStore:
                 return True
             current = current.parent
         return False
+
+    def _is_legacy_memory_repo(self) -> bool:
+        if not (self._workspace / ".git").is_dir():
+            return False
+        try:
+            from dulwich.repo import Repo
+
+            with Repo(str(self._workspace)) as repo:
+                sha = repo.refs[cast("Ref", b"HEAD")]
+                while sha:
+                    commit = repo[sha]
+                    if commit.type_name != b"commit":
+                        return False
+                    value = cast("Commit", commit)
+                    if value.parents:
+                        sha = value.parents[0]
+                    else:
+                        if (
+                            value.message.strip() == b"init: nanobot memory store"
+                            and value.author == b"nanobot <nanobot@dream>"
+                        ):
+                            root = cast("Commit", repo[sha])
+                            tree = cast("Tree", repo[root.tree])
+                            gitignore = self._read_blob_from_tree(repo, tree, ".gitignore")
+                            return gitignore is not None and gitignore.startswith("/*\n")
+                        return False
+            return False
+        except Exception:
+            return False
 
     def _update_gitignore(self) -> None:
         path = self._workspace / ".gitignore"

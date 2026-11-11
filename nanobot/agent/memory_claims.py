@@ -437,6 +437,8 @@ class ClaimStore:
                     text = line_text(line.text)
                     if len(text.strip()) >= 2:
                         tombstone("chunk", digest(text), f"{line.path}:{line.line}")
+                    if claim is not None and claim.text != text and len(claim.text.strip()) >= 2:
+                        tombstone("chunk", digest(claim.text), f"{line.path}:{line.line}")
                     if claim is None:
                         removed.append(LineMatch(line.path, line.line, line.text.strip()))
             history_ids = sorted({line.line for line, source in history_lines if source in sources})

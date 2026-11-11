@@ -161,7 +161,7 @@ async def test_forget_scrubs_current_turn_replay_restart_and_database_bytes(tmp_
             records = [row[0] for row in db.execute("SELECT record FROM history_entries ORDER BY position")]
             decoded = expand_graph_fields(HistoryFact.decode(records[1]).content)
             assert decoded["context_graph"]["nodes"][0]["name"] == "[已遗忘]"
-            assert decoded["context_snapshot"]["graph"]["nodes"][0]["path"] == "[已遗忘]"
+            assert decoded["context_snapshot"]["graph"]["nodes"][0]["path"] == "/[已遗忘].md"
             assert db.execute("SELECT byte_count FROM history_turns").fetchone()[0] == sum(map(history_record_size, records))
             assert db.execute("SELECT record_count, user_count FROM history_turns").fetchone() == (4, 1)
             assert secret not in "\n".join(db.iterdump())
@@ -200,7 +200,7 @@ async def test_forget_preserves_call_ids_and_decodes_tool_arguments(tmp_path):
         assert call["function"]["name"] == draft.messages[2]["name"] == "secret_tool"
         assert call["type"] == "function" and draft.messages[2]["role"] == "tool"
         assert json.loads(call["function"]["arguments"]) == {"name": "[已遗忘]", "keep": 3}
-        assert draft.messages[2]["content"] == "[已遗忘]"
+        assert draft.messages[2]["content"] == "[已遗忘] result"
         assert draft.get_history()[-1]["tool_call_id"] == "secret-call"
     finally:
         await state.aclose()

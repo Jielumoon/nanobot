@@ -199,10 +199,14 @@ def _scrub_log_files(path: Path, redact: Redactor) -> None:
     # Glob rotated copies: a lowered backup count leaves older numbered files behind.
     for item in (path, *path.parent.glob(f"{path.name}.[0-9]*")):
         if item.exists():
+            if item.is_symlink():
+                raise ValueError("本地日志清理拒绝符号链接")
             redact.scrub_lines(item)
 
 
 def scrub_log(path: Path, redact: Redactor) -> None:
+    if path.is_symlink():
+        raise ValueError("本地日志清理拒绝符号链接")
     output = _OUTPUTS.get(path.resolve())
     if output is not None and not output.closed:
         output.scrub(redact)

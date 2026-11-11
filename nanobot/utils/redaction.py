@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -19,14 +20,20 @@ _IDENTIFIERS = frozenset({
 
 class Redactor:
     def __init__(self, terms: Sequence[str]) -> None:
-        self.terms = tuple(term.casefold() for term in terms)
+        self.terms = tuple(sorted({term for term in terms if term}, key=len, reverse=True))
+        patterns = []
+        for term in self.terms:
+            escaped = re.escape(term)
+            if re.fullmatch(r"[A-Za-z0-9_]+", term):
+                escaped = rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])"
+            patterns.append(escaped)
+        self._pattern = re.compile("|".join(patterns), re.IGNORECASE) if patterns else None
 
     def matches(self, text: str) -> bool:
-        folded = text.casefold()
-        return any(term in folded for term in self.terms)
+        return self._pattern is not None and self._pattern.search(text) is not None
 
     def text(self, text: str) -> str:
-        return "[已遗忘]" if self.matches(text) else text
+        return self._pattern.sub("[已遗忘]", text) if self._pattern is not None else text
 
     def json(self, value: Any, *, identifiers: bool = True) -> Any:
         if isinstance(value, dict):
@@ -53,7 +60,7 @@ class Redactor:
 
     def scrub_lines(self, path: Path) -> None:
         content = path.read_text(encoding="utf-8")
-        cleaned = "".join(line for line in content.splitlines(keepends=True) if not self.matches(line))
+        cleaned = "".join(self.text(line) for line in content.splitlines(keepends=True))
         if cleaned != content:
             write_text_atomic(path, cleaned)
 
