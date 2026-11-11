@@ -131,6 +131,7 @@ def append_runtime_context(
             "version": 1,
             "sources": sources,
             "blocks": context_blocks,
+            "parts": rendered,
         }
 
     text = "" if content is None else str(content)
@@ -140,6 +141,7 @@ def append_runtime_context(
         "version": 1,
         "sources": sources,
         "suffix": suffix,
+        "parts": rendered,
     }
 
 
@@ -166,6 +168,9 @@ def detach_runtime_context(
             clean_content = content[: -(len(suffix) + 2)]
         else:
             return None
+        if "parts" in marker_data:
+            parts = cast(list[str], marker_data["parts"])
+            return clean_content, sources, [{"type": "text", "text": part} for part in parts]
         return clean_content, sources, [{"type": "text", "text": suffix}]
 
     expected = marker_data.get("blocks")
@@ -192,22 +197,81 @@ def reattach_runtime_context(
     ):
         suffix = "\n\n".join(block["text"] for block in context_blocks)
         merged = f"{content}\n\n{suffix}" if content else suffix
-        return merged, {
+        marker: dict[str, Any] = {
             "version": 1,
             "sources": list(sources),
             "suffix": suffix,
         }
+        if len(sources) == len(context_blocks):
+            marker["parts"] = [block["text"] for block in context_blocks]
+        return merged, marker
 
     visible_blocks: list[Any] = (
         [*cast(list[Any], content)]
         if isinstance(content, list)
         else ([] if content is None else [{"type": "text", "text": str(content)}])
     )
-    return [*visible_blocks, *context_blocks], {
+    marker = {
         "version": 1,
         "sources": list(sources),
         "blocks": context_blocks,
     }
+    if len(sources) == len(context_blocks):
+        marker["parts"] = [block["text"] for block in context_blocks]
+    return [*visible_blocks, *context_blocks], marker
+
+
+_MEMORY_SOURCES = frozenset({"memory_recall"})
+
+
+def replay_history_message(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Omit stale memory context only in the model's replay projection.
+
+    Memory markers retain per-source parts. Older markers without parts
+    predate memory recall and pass through unchanged.
+    Stored messages and unrelated runtime providers are never rewritten.
+    """
+    projected = dict(message)
+    marker = message.get(RUNTIME_CONTEXT_HISTORY_META)
+    if not isinstance(marker, Mapping) or "parts" not in marker:
+        return projected
+    detached = detach_runtime_context(message.get("content"), cast(Mapping[str, Any], marker))
+    if detached is None:
+        return projected
+    clean, sources, blocks = detached
+    if not _MEMORY_SOURCES.intersection(sources):
+        return projected
+    retained_sources = [source for source in sources if source not in _MEMORY_SOURCES]
+    retained_blocks = [
+        block for source, block in zip(sources, blocks, strict=True)
+        if source not in _MEMORY_SOURCES
+    ]
+    if retained_blocks:
+        projected["content"], projected[RUNTIME_CONTEXT_HISTORY_META] = reattach_runtime_context(
+            clean, retained_sources, retained_blocks,
+        )
+    else:
+        projected["content"] = clean
+        projected.pop(RUNTIME_CONTEXT_HISTORY_META, None)
+    return projected
+
+
+def replay_model_memory(message: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply memory-only replay filtering to an in-flight model message."""
+    projected = dict(message)
+    meta = dict(projected.get("_meta") or {})
+    marker = meta.get(RUNTIME_CONTEXT_MESSAGE_META)
+    if marker is not None:
+        projected[RUNTIME_CONTEXT_HISTORY_META] = marker
+    projected = replay_history_message(projected)
+    if marker is not None:
+        retained = projected.pop(RUNTIME_CONTEXT_HISTORY_META, None)
+        if retained is None:
+            meta.pop(RUNTIME_CONTEXT_MESSAGE_META, None)
+        else:
+            meta[RUNTIME_CONTEXT_MESSAGE_META] = retained
+        projected["_meta"] = meta
+    return projected
 
 
 def public_history_message(message: Mapping[str, Any]) -> dict[str, Any]:

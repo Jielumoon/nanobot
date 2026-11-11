@@ -17,6 +17,9 @@ function runtimeSettings() {
     "agents.defaults.timezone_mode": "auto",
     "agents.defaults.timezone": "UTC",
     "agents.defaults.dream.enabled": true,
+    "agents.defaults.memory.claims_enabled": true,
+    "agents.defaults.memory.people.enabled": true,
+    "agents.defaults.memory.embedding.enabled": false,
     "agents.defaults.session_ttl_minutes": 15,
     "gateway.heartbeat.enabled": true,
     "tools.exec.timeout": 60,
@@ -72,15 +75,41 @@ describe("Runtime configuration settings", () => {
     expect(screen.getByRole("switch", { name: "Web access" })).toBeInTheDocument();
   });
 
-  it("offers only the memory consolidation switch and saves only dream.enabled", async () => {
+  it.each([
+    ["Memory consolidation", "agents.defaults.dream.enabled", false],
+    ["Structured memory", "agents.defaults.memory.claims_enabled", false],
+    ["People memory", "agents.defaults.memory.people.enabled", false],
+    ["Semantic search", "agents.defaults.memory.embedding.enabled", true],
+  ] as const)("saves only the changed %s switch", async (label, path, enabled) => {
     const payload = runtimeSettings();
-    requestMutationMock.mockResolvedValue({ ...payload, runtime_config: { ...payload.runtime_config, "agents.defaults.dream.enabled": false } });
+    requestMutationMock.mockResolvedValue({ ...payload, runtime_config: {
+      ...payload.runtime_config, [path]: enabled,
+    } });
     renderSettingsView({ initialSection: "memory", initialSettings: payload });
     const memory = within(screen.getByRole("region", { name: "Memory consolidation" }));
-    expect(memory.getAllByRole("switch")).toHaveLength(1);
+    expect(memory.getAllByRole("switch")).toHaveLength(4);
+    fireEvent.click(screen.getByRole("switch", { name: label }));
+    await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+      "settings.runtime_config.update", { values: { [path]: enabled } }, 20_000,
+    ));
+    await waitFor(() => expect(screen.getByRole("switch", { name: label }))
+      .toHaveAttribute("aria-checked", String(enabled)));
+  });
+
+  it("keeps older hosts' supported memory switch usable", async () => {
+    const payload = settingsPayload();
+    payload.runtime_config = { "agents.defaults.dream.enabled": true };
+    requestMutationMock.mockResolvedValue({ ...payload, runtime_config: {
+      "agents.defaults.dream.enabled": false,
+    } });
+    renderSettingsView({ initialSection: "memory", initialSettings: payload });
+    expect(within(screen.getByRole("region", { name: "Memory consolidation" }))
+      .getAllByRole("switch")).toHaveLength(1);
     fireEvent.click(screen.getByRole("switch", { name: "Memory consolidation" }));
-    await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith("settings.runtime_config.update", { values: { "agents.defaults.dream.enabled": false } }, 20_000));
-    await waitFor(() => expect(screen.getByRole("switch", { name: "Memory consolidation" })).not.toBeChecked());
+    await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+      "settings.runtime_config.update", { values: { "agents.defaults.dream.enabled": false } },
+      20_000,
+    ));
   });
 
   it("explains unavailable memory settings instead of rendering a blank page", () => {

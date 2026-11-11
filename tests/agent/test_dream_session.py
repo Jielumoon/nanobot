@@ -1,25 +1,6 @@
-from datetime import datetime, timedelta
-from unittest.mock import patch
+from datetime import datetime
 
-from nanobot.agent.memory import MemoryStore
 from nanobot.session.manager import SessionManager
-
-
-class TestDreamSessionKey:
-    def test_contains_timestamp(self):
-        key = MemoryStore.dream_session_key()
-        assert key.startswith("dream:")
-        ts_part = key.split(":", 1)[1]
-        datetime.strptime(ts_part, "%Y%m%d-%H%M%S")
-
-    def test_unique_across_calls(self):
-        now = datetime(2026, 5, 28, 10, 0, 0)
-        with patch("nanobot.agent.memory.datetime") as mock_dt:
-            mock_dt.now.side_effect = [now, now + timedelta(seconds=1)]
-            k1 = MemoryStore.dream_session_key()
-            k2 = MemoryStore.dream_session_key()
-
-        assert k1 != k2
 
 
 class TestPruneDreamSessions:

@@ -325,7 +325,9 @@ def test_commit_dream_changes_skips_noop_run(tmp_path) -> None:
     store.git.auto_commit("initial")
     store.git.auto_commit = MagicMock(wraps=store.git.auto_commit)
 
-    assert cli_gateway_runtime._commit_dream_changes(store) is None
+    assert store.finish_dream(
+        run_id="maintenance", status="empty", cursor=None, prefix="dream: maintenance",
+    ) == (False, None)
     store.git.auto_commit.assert_not_called()
 
 
@@ -338,11 +340,15 @@ def test_commit_dream_changes_commits_real_edits(tmp_path) -> None:
     store.write_memory("# Memory\n- Research notes")
     store.git.auto_commit = MagicMock(wraps=store.git.auto_commit)
 
-    sha = cli_gateway_runtime._commit_dream_changes(store)
+    changed, sha = store.finish_dream(
+        run_id="scheduled", status="completed", cursor=1,
+        prefix="dream: periodic memory consolidation",
+    )
+    assert changed
 
     assert sha is not None
-    store.git.auto_commit.assert_called_once()
-    message = store.git.auto_commit.call_args.args[0]
+    assert store.git.auto_commit.call_count == 2
+    message = store.git.auto_commit.call_args_list[0].args[0]
     assert message.startswith("dream: periodic memory consolidation\n\n")
     assert "Research notes" in message
 

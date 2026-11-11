@@ -25,6 +25,7 @@ from nanobot.agent.cron_turns import CronTurnCoordinator
 from nanobot.agent.execution_policy import ExecutionControlError, ExecutionPolicy, ExecutionScope
 from nanobot.agent.hook import AgentHook, AgentTurnHookFactory
 from nanobot.agent.memory import Consolidator
+from nanobot.agent.memory_context_state import MemoryContextRefresh
 from nanobot.agent.model_runtime import ModelRuntimeResolver
 from nanobot.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
 from nanobot.agent.subagent import SubagentManager
@@ -59,7 +60,7 @@ from nanobot.command import CommandContext, CommandRouter
 from nanobot.command.builtin import register_core_commands
 from nanobot.command.router import CommandExpansion, command_text
 from nanobot.config.network import NetworkConfig
-from nanobot.config.schema import AgentDefaults, ModelPresetConfig
+from nanobot.config.schema import AgentDefaults, MemoryConfig, ModelPresetConfig
 from nanobot.events import NO_EVENTS, AgentEvent, EventSink
 from nanobot.llm_usage.context import source_from_request
 from nanobot.providers.base import LLMProvider, LLMUsage, ProviderConversationState
@@ -120,6 +121,7 @@ if TYPE_CHECKING:
     from nanobot.config.schema import (
         ChannelsConfig,
         Config,
+        ProvidersConfig,
         ToolsConfig,
     )
     from nanobot.cron.service import CronService
@@ -310,6 +312,8 @@ class AgentLoop:
         idle_compact_check_interval_seconds: int = 0,
         recovery_admission: RecoveryAdmission | None = None,
         builtin_assembly: Callable[[SessionManager, MessageBus, ToolRegistry, CommandRouter], ExecutionPolicy] | None = None,
+        memory_config: MemoryConfig | None = None,
+        memory_providers: ProvidersConfig | None = None,
     ):
         from nanobot.config.schema import ToolsConfig
 
@@ -374,7 +378,14 @@ class AgentLoop:
         self._extra_hooks: list[AgentHook] = hooks or []
         self._hook_factories: list[AgentTurnHookFactory] = hook_factories or []
 
-        self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
+        self.context = ContextBuilder(
+            workspace,
+            timezone=timezone,
+            disabled_skills=disabled_skills,
+            memory_config=memory_config,
+            providers=memory_providers,
+            network=self.network_config,
+        )
         self.sessions = session_manager or SessionManager(workspace)
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
@@ -520,6 +531,8 @@ class AgentLoop:
             model_presets=preset_helpers.configured_model_presets(config),
             model_preset=defaults.model_preset,
             dream_model_preset=defaults.dream.model_override,
+            memory_config=defaults.memory,
+            memory_providers=config.providers,
             restart_mode=config.gateway.restart_mode,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
@@ -665,6 +678,7 @@ class AgentLoop:
             timezone=self.context.timezone or "UTC",
             workspace_sandbox=self.workspace_scopes.sandbox_status,
             runtime_control=runtime_control,
+            memory=self.context.memory,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
@@ -759,6 +773,7 @@ class AgentLoop:
             media=ctx.msg.media if ctx.kind is TurnKind.USER and ctx.msg.media else None,
             session_summary=ctx.pending_summary,
             runtime_context_blocks=ctx.runtime_context_blocks,
+            memory_view=ctx.request_context.memory_view if ctx.request_context is not None else None,
         )
 
     async def _request_context_for_turn(self, ctx: TurnContext) -> RequestContext:
@@ -818,6 +833,16 @@ class AgentLoop:
         request: RequestContext,
         tools: ToolRegistry,
     ) -> list[RuntimeContextBlock]:
+        if (
+            request.persist_session and request.memory_view is None
+            and self.context.memory.claims is not None
+        ):
+            query = request.original_user_text or ""
+            semantic = await self.context.memory.query_embedding(query[:2000])
+            view = await self.runner.prepare_prompt(
+                self.context.memory.prompt_view, query, semantic=semantic,
+            )
+            request = dataclasses.replace(request, memory_view=view)
         providers = [
             *tools.get_runtime_context_providers(),
             *self._runtime_context_providers,
@@ -1272,6 +1297,15 @@ class AgentLoop:
             ),
         )
         effective_tools = tools if tools is not None else self.tools
+        memory_generation = (
+            transcript_input.memory_view.generation if transcript_input.memory_view is not None
+            else self.context.memory.generation()
+        )
+        refresh_memory = MemoryContextRefresh(
+            self.context, memory_generation, channel=request_ctx.channel,
+            workspace=effective_scope.project_path,
+            include_memory=session.policy.persist if session is not None else True,
+        )
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
         request_token = bind_request_context(request_ctx)
         workspace_token = bind_workspace_scope(effective_scope)
@@ -1341,6 +1375,8 @@ class AgentLoop:
                     execution_scope.continuation_prompt if execution_scope is not None else None
                 ),
                 provider_state=provider_state,
+                context_generation=memory_generation,
+                refresh_context=refresh_memory,
                 llm_usage_source=source_from_request(
                     active_session_key,
                     channel=request_ctx.channel,
@@ -2224,10 +2260,22 @@ class AgentLoop:
         await ctx.delivery.runtime_admitted(runtime)
 
         ctx.request_context = await self._request_context_for_turn(ctx)
+        if self.context.memory.claims is not None:
+            query = ctx.msg.content if ctx.kind is TurnKind.USER else None
+            semantic = (
+                await self.context.memory.query_embedding(query[:2000]) if query is not None
+                else None
+            )
+            memory_view = await self.runner.prepare_prompt(
+                self.context.memory.prompt_view, query, semantic=semantic,
+            )
+            ctx.request_context = dataclasses.replace(ctx.request_context, memory_view=memory_view)
         if ctx.kind is TurnKind.USER:
             ctx.runtime_context_blocks = await self._resolve_runtime_context_for_turn(ctx)
         staged_provider_state = False
-        if stored_state is not None and runtime.provider.can_resume_conversation_state(
+        if stored_state is not None and (
+            (stored_state.context_generation or "") == self.context.memory.generation()
+        ) and runtime.provider.can_resume_conversation_state(
             stored_state,
             runtime.model,
         ):

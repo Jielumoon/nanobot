@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import fields, replace
 from datetime import datetime
 from typing import Any, TypeVar, cast
+from uuid import uuid4
 
 from nanobot.bus.events import InboundMessage
 from nanobot.session.display_history import HistoryFact, HistoryImport, HistoryKind, HistoryReader
@@ -25,6 +26,7 @@ from nanobot.session.model_selection import SESSION_MODEL_PRESET_METADATA_KEY
 from nanobot.session.sqlite_store import SessionConflictError, SqliteSessionStore
 from nanobot.session.types import PARENT_SESSION_KEY, SessionTypes
 from nanobot.utils.cancellation import shield_and_drain
+from nanobot.utils.redaction import Redactor
 
 _T = TypeVar("_T")
 _PENDING_KEY = "pending_user_turn"
@@ -68,6 +70,7 @@ class SessionState:
         self._on_delete = on_delete
         self._snapshots: dict[str, Session] = {}
         self._transients: dict[str, Session] = {}
+        self._pending_forgets: dict[str, set[str]] = {}
         self._policies: dict[str, SessionPolicy] = {}
         # Process-local deletion tombstones reject late key-only mutations. An
         # explicit create/get/reset/import starts a new generation and clears it.
@@ -678,7 +681,45 @@ class SessionState:
         """Commit the assembled transcript and clear its recovery checkpoint."""
         session.metadata.pop(_PENDING_KEY, None)
         session.metadata.pop(_CHECKPOINT_KEY, None)
-        await self._submit_draft(session)
+        async def finish() -> None:
+            await self._submit_draft(session)
+            terms = self._pending_forgets.get(session.key)
+            if terms is not None:
+                await self.redact_memory(sorted(terms))
+                self._pending_forgets.pop(session.key)
+                fresh = await self.read(session.key)
+                if fresh is None:
+                    raise SessionConflictError("遗忘完成后会话已被删除")
+                self._refresh(session, fresh)
+
+        await shield_and_drain(finish())
+
+    def request_memory_forget(self, key: str, terms: list[str]) -> None:
+        """Defer scrubbing until the tool's current turn has been committed."""
+        self._bind_loop()
+        self._pending_forgets.setdefault(key, set()).update(terms)
+
+    async def redact_memory(self, terms: list[str]) -> None:
+        def scrub() -> None:
+            self._store.redact_memory(terms)
+            redact = Redactor(terms)
+            with self._cache_lock:
+                self._snapshots.clear()
+                for key, session in self._transients.items():
+                    messages = redact.json(session.messages)
+                    metadata = redact.json(session.metadata)
+                    changed = messages != session.messages or metadata != session.metadata
+                    self._transients[key] = replace(
+                        session, messages=messages, metadata=metadata, provider_state=None,
+                        generation=uuid4().hex if changed else session.generation,
+                        revision=session.revision + int(changed),
+                    )
+            try:
+                self._store.vacuum()
+            except sqlite3.Error as exc:
+                raise sqlite3.OperationalError(f"会话已脱敏，数据库物理清理未完成：{exc}") from exc
+
+        await self._execute(None, scrub, operation_name="遗忘会话副本")
 
     async def restore_interruption(self, session: Session) -> None:
         """Commit a recovery decision against the version it classified."""

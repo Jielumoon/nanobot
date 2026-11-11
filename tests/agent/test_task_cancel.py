@@ -220,7 +220,7 @@ class TestHandleStop:
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/stop")
         ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/stop", loop=loop)
         out = await cmd_stop(ctx)
-        assert "No active task" in out.content
+        assert "没有正在运行的任务" in out.content
 
     @pytest.mark.asyncio
     async def test_aclose_cancels_active_turn_before_resources(self):
@@ -303,7 +303,7 @@ class TestHandleStop:
         out = await cmd_stop(ctx)
 
         assert cancelled.is_set()
-        assert "stopped" in out.content.lower()
+        assert "已停止" in out.content
 
     @pytest.mark.asyncio
     async def test_stop_cancels_multiple_tasks(self):
@@ -330,7 +330,7 @@ class TestHandleStop:
         out = await cmd_stop(ctx)
 
         assert all(e.is_set() for e in events)
-        assert "2 task" in out.content
+        assert "已停止 2 个任务" in out.content
 
 
 class TestDispatch:

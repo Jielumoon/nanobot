@@ -548,6 +548,9 @@
       "fields": {
         "agents_defaults_timezone_mode": {"label": "Fuso do sistema", "help": "Desative para escolher um fuso horário.\n\nDesative para escolher o fuso horário manualmente."},
         "agents_defaults_timezone": {"label": "Fuso horário", "help": "Os deslocamentos UTC usam a data atual.\n\nEscolha um fuso horário. A diferença em relação ao UTC considera a data atual."},
+        "agents_defaults_memory_claims_enabled": {"label": "Memória estruturada", "help": "Ativa as ferramentas de memória e o armazenamento por categoria. Desativar mantém os arquivos existentes."},
+        "agents_defaults_memory_people_enabled": {"label": "Memória de pessoas", "help": "Salva informações com evidências e as recupera quando uma pessoa é mencionada. Requer memória estruturada."},
+        "agents_defaults_memory_embedding_enabled": {"label": "Busca semântica", "help": "Usa o provedor de vetores configurado; pode haver custos de API. O Dream gera vetores em lotes. Se o serviço falhar, a busca por palavras-chave continua disponível."},
         "agents_defaults_dream_enabled": {"label": "Consolidação de memória", "help": "Organize a memória automaticamente; desativar preserva as memórias existentes.\n\nOrganiza informações úteis das conversas. A memória existente continua disponível após desativar."},
         "gateway_heartbeat_enabled": {"label": "Verificação periódica", "help": "Verifique as tarefas de HEARTBEAT.md periodicamente.\n\nVerifica periodicamente as tarefas em HEARTBEAT.md."},
         "gateway_heartbeat_interval_s": {"label": "Intervalo de verificação", "help": "Segundos entre verificações do heartbeat.\n\nO gateway agenda as verificações ao iniciar."},

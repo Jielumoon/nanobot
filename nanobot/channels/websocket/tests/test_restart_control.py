@@ -78,7 +78,7 @@ async def test_settings_restart_does_not_create_or_change_chat_history(history, 
     assert not any(frame["event"] == "user_message" for frame in frames)
     replies = [frame for frame in frames if frame["event"] == "message"]
     assert len(replies) == len(chat_ids)
-    assert all(frame["text"] == "Restarting..." and frame["turn_id"].startswith("webui-system:") for frame in replies)
+    assert all(frame["text"] == "正在重启……" and frame["turn_id"].startswith("webui-system:") for frame in replies)
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.jsonl")} == before_files
     assert history.read(key) == before_transcript
     fresh = SessionManager(sessions.workspace)

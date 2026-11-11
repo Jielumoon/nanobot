@@ -548,6 +548,9 @@
       "fields": {
         "agents_defaults_timezone_mode": {"label": "Zona del sistema", "help": "Desactívalo para elegir una zona horaria.\n\nDesactiva esta opción para elegir la zona horaria manualmente."},
         "agents_defaults_timezone": {"label": "Zona horaria", "help": "Los desfases UTC usan la fecha actual.\n\nElige una zona horaria. La diferencia con UTC corresponde a la fecha actual."},
+        "agents_defaults_memory_claims_enabled": {"label": "Memoria estructurada", "help": "Activa las herramientas de memoria y el almacenamiento por categorías. Al desactivarla se conservan los archivos existentes."},
+        "agents_defaults_memory_people_enabled": {"label": "Memoria de personas", "help": "Guarda información respaldada por pruebas y la recupera al mencionar a una persona. Requiere memoria estructurada."},
+        "agents_defaults_memory_embedding_enabled": {"label": "Búsqueda semántica", "help": "Usa el proveedor de vectores configurado; pueden aplicarse cargos de API. Dream genera vectores por lotes. Si el servicio falla, se mantiene la búsqueda por palabras clave."},
         "agents_defaults_dream_enabled": {"label": "Consolidación de memoria", "help": "Organiza la memoria automáticamente; al desactivar, conserva los recuerdos.\n\nOrganiza la información útil de las conversaciones. La memoria existente sigue disponible al desactivarla."},
         "gateway_heartbeat_enabled": {"label": "Comprobación periódica", "help": "Revisa periódicamente las tareas de HEARTBEAT.md.\n\nBusca tareas periódicamente en HEARTBEAT.md."},
         "gateway_heartbeat_interval_s": {"label": "Intervalo de revisión", "help": "Segundos entre revisiones del heartbeat.\n\nLa gateway programa las comprobaciones al iniciarse."},

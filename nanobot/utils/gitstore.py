@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, cast
 
 from loguru import logger
 
+from nanobot.utils.atomic_file import atomic_write_text
+
 if TYPE_CHECKING:
     from dulwich.objects import Blob, Commit, ObjectID, Tree
     from dulwich.refs import Ref
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
 # are tiny in practice, but a pathological rewrite must not blow up the audit
 # record. The structured per-file summary is always emitted in full regardless.
 _WORKING_TREE_DIFF_MAX_CHARS = 6000
+_MEMORY_REPO_MARKER = ".git/nanobot-memory-store"
 
 
 class GitStoreError(RuntimeError):
@@ -45,13 +48,27 @@ class CommitInfo:
 class GitStore:
     """Git-backed version control for memory files."""
 
-    def __init__(self, workspace: Path, tracked_files: list[str]):
+    def __init__(
+        self,
+        workspace: Path,
+        tracked_files: list[str],
+        tracked_dirs: list[str] | None = None,
+        restore_excluded: list[str] | None = None,
+    ):
         self._workspace = workspace
         self._tracked_files = tracked_files
+        # Directories whose ``*.md`` files are tracked as they appear, such as
+        # dated memory notes.
+        self._tracked_dirs = list(tracked_dirs or [])
+        self._restore_excluded = set(restore_excluded or [])
+        self._ownership_cache: bool | None = None
 
     def is_initialized(self) -> bool:
-        """Check if the git repo has been initialized."""
-        return (self._workspace / ".git").is_dir()
+        """Check whether Nanobot owns the Git repo at this workspace root."""
+        if self._ownership_cache is None:
+            marker = self._workspace / _MEMORY_REPO_MARKER
+            self._ownership_cache = marker.is_file() or self._is_legacy_memory_repo()
+        return self._ownership_cache
 
 
     def init(self) -> bool:
@@ -61,6 +78,10 @@ class GitStore:
         Returns True if a new repo was created, False if already exists.
         """
         if self.is_initialized():
+            self._update_gitignore()
+            return False
+
+        if (self._workspace / ".git").is_dir():
             return False
 
         if self._is_inside_git_repo():
@@ -76,31 +97,17 @@ class GitStore:
 
             porcelain.init(str(self._workspace))
 
-            gitignore = self._workspace / ".gitignore"
-            dream_entries = self._build_gitignore()
-            if gitignore.exists():
-                existing = gitignore.read_text(encoding="utf-8")
-                existing_lines = set(existing.splitlines())
-                new_lines = [
-                    line
-                    for line in dream_entries.splitlines()
-                    if line not in existing_lines
-                ]
-                if new_lines:
-                    merged = existing.rstrip("\n") + "\n" + "\n".join(new_lines) + "\n"
-                    gitignore.write_text(merged, encoding="utf-8")
-            else:
-                gitignore.write_text(dream_entries, encoding="utf-8")
+            self._update_gitignore()
 
             for rel in self._tracked_files:
                 p = self._workspace / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
                 if not p.exists():
-                    p.write_text("", encoding="utf-8")
+                    atomic_write_text(p, "")
 
             porcelain.add(
                 str(self._workspace),
-                paths=self._staging_paths(".gitignore", *self._tracked_files),
+                paths=self._staging_paths(".gitignore", *self.tracked_paths()),
             )
             porcelain.commit(
                 str(self._workspace),
@@ -108,6 +115,8 @@ class GitStore:
                 author=b"nanobot <nanobot@dream>",
                 committer=b"nanobot <nanobot@dream>",
             )
+            atomic_write_text(self._workspace / _MEMORY_REPO_MARKER, "nanobot memory store\n")
+            self._ownership_cache = True
             logger.debug("Git store initialized at {}", self._workspace)
             return True
         except Exception as exc:
@@ -128,7 +137,11 @@ class GitStore:
             # Stage first so Dulwich refreshes the content hashes.  A status
             # check can miss rapid same-size rewrites when the filesystem also
             # preserves the file's mtime.
-            porcelain.add(str(self._workspace), paths=self._staging_paths(*self._tracked_files))
+            # Paths present only in HEAD stage the deletion of a tracked-dir file.
+            porcelain.add(
+                str(self._workspace),
+                paths=self._staging_paths(".gitignore", *self.tracked_paths()),
+            )
             st = porcelain.status(str(self._workspace))
             staged = cast(dict[object, list[object]], st.staged)
             if not any(staged.values()):
@@ -157,6 +170,57 @@ class GitStore:
         except Exception as exc:
             raise GitStoreError(f"Git auto-commit failed: {message}") from exc
 
+
+    def _working_dir_files(self, directory: str) -> list[str]:
+        root = self._workspace / directory
+        if not root.is_dir():
+            return []
+        return sorted(
+            path.relative_to(self._workspace).as_posix()
+            for path in root.glob("*.md")
+            if path.is_file()
+        )
+
+    def _tree_dir_files(self, repo: "Repo", tree: "Tree | None", directory: str) -> list[str]:
+        current = tree
+        for part in Path(directory).parts:
+            if current is None:
+                return []
+            try:
+                entry = current[part.encode()]
+            except KeyError:
+                return []
+            obj = repo[entry[1]]
+            current = cast("Tree", obj) if obj.type_name == b"tree" else None
+        if current is None:
+            return []
+        names: list[str] = []
+        for item in current.items():
+            name = item.path.decode("utf-8", errors="replace")
+            if name.endswith(".md") and repo[item.sha].type_name == b"blob":
+                names.append(f"{Path(directory).as_posix()}/{name}")
+        return sorted(names)
+
+    def tracked_paths(self) -> list[str]:
+        """Tracked files plus every ``*.md`` file in tracked directories (working tree or HEAD)."""
+        paths = list(self._tracked_files)
+        if not self._tracked_dirs:
+            return paths
+        head_files: list[str] = []
+        if self.is_initialized():
+            from dulwich.repo import Repo
+
+            with Repo(str(self._workspace)) as repo:
+                head_tree = self._head_tree(repo)
+                for directory in self._tracked_dirs:
+                    head_files.extend(self._tree_dir_files(repo, head_tree, directory))
+        for directory in self._tracked_dirs:
+            for path in sorted({*self._working_dir_files(directory), *(
+                f for f in head_files if f.startswith(f"{Path(directory).as_posix()}/")
+            )}):
+                if path not in paths:
+                    paths.append(path)
+        return paths
 
     def _staging_paths(self, *paths: str) -> list[str]:
         return [str((self._workspace / path).absolute()) for path in paths]
@@ -199,18 +263,62 @@ class GitStore:
             current = current.parent
         return False
 
+    def _is_legacy_memory_repo(self) -> bool:
+        if not (self._workspace / ".git").is_dir():
+            return False
+        try:
+            from dulwich.repo import Repo
+
+            with Repo(str(self._workspace)) as repo:
+                sha = repo.refs[cast("Ref", b"HEAD")]
+                while sha:
+                    commit = repo[sha]
+                    if commit.type_name != b"commit":
+                        return False
+                    value = cast("Commit", commit)
+                    if value.parents:
+                        sha = value.parents[0]
+                    else:
+                        if (
+                            value.message.strip() == b"init: nanobot memory store"
+                            and value.author == b"nanobot <nanobot@dream>"
+                        ):
+                            root = cast("Commit", repo[sha])
+                            tree = cast("Tree", repo[root.tree])
+                            gitignore = self._read_blob_from_tree(repo, tree, ".gitignore")
+                            return gitignore is not None and gitignore.startswith("/*\n")
+                        return False
+            return False
+        except Exception:
+            return False
+
+    def _update_gitignore(self) -> None:
+        path = self._workspace / ".gitignore"
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        existing_lines = set(existing.splitlines())
+        additions = [
+            line for line in self._build_gitignore().splitlines() if line not in existing_lines
+        ]
+        if additions:
+            prefix = existing.rstrip("\n") + "\n" if existing else ""
+            atomic_write_text(path, prefix + "\n".join(additions) + "\n")
+
     def _build_gitignore(self) -> str:
         dirs: set[str] = set()
         for f in self._tracked_files:
             parent = str(Path(f).parent)
             if parent != ".":
                 dirs.add(parent)
+        for d in self._tracked_dirs:
+            parts = Path(d).parts
+            for depth in range(1, len(parts) + 1):
+                dirs.add(Path(*parts[:depth]).as_posix())
         lines = ["/*"]
         for d in sorted(dirs):
             lines.append(f"!{d}/")
         for f in self._tracked_files:
             lines.append(f"!{f}")
-        lines.append("!.gitignore")
+        lines.extend(["!.gitignore", "*.sqlite", "*.sqlite3", "*-wal", "*-shm"])
         return "\n".join(lines) + "\n"
 
 
@@ -428,18 +536,19 @@ class GitStore:
 
 
     def revert(self, commit: str, *, message_prefix: str | None = None) -> str | None:
-        """Revert (undo) the changes introduced by the given commit.
+        """Restore the selected parent snapshot and commit it."""
+        if not self.restore_snapshot(commit, message_prefix=message_prefix):
+            return None
+        return self.auto_commit(f"revert: undo {commit}")
 
-        Restores all tracked memory files to the state at the commit's parent,
-        then creates a new commit recording the revert. When *message_prefix*
-        is provided, commits outside that history are rejected before any files
-        are changed.
+    def restore_snapshot(self, commit: str, *, message_prefix: str | None = None) -> bool:
+        """Restore the complete managed set to the selected commit's parent, without committing.
 
-        Returns the new commit SHA, or ``None`` when the commit cannot be reverted.
-        Repository and filesystem failures raise :class:`GitStoreError`.
+        The caller reconciles permanent tombstones before publishing the restored state.
+        Files absent from that snapshot are removed, including files added by later commits.
         """
         if not self.is_initialized():
-            return None
+            return False
 
         try:
             from dulwich.repo import Repo
@@ -447,12 +556,12 @@ class GitStore:
             full_sha = self._resolve_sha(commit)
             if not full_sha:
                 logger.warning("Git revert: SHA not found: {}", commit)
-                return None
+                return False
 
             with Repo(str(self._workspace)) as repo:
                 commit_obj = repo[full_sha]
                 if commit_obj.type_name != b"commit":
-                    return None
+                    return False
                 typed_commit = cast("Commit", commit_obj)
 
                 commit_message = typed_commit.message.decode(
@@ -465,28 +574,27 @@ class GitStore:
                         commit,
                         message_prefix,
                     )
-                    return None
+                    return False
 
                 if not typed_commit.parents:
                     logger.warning("Git revert: cannot revert root commit {}", commit)
-                    return None
+                    return False
 
                 parent_obj = cast("Commit", repo[typed_commit.parents[0]])
                 tree = cast("Tree", repo[parent_obj.tree])
-
-                restored: list[str] = []
-                for filepath in self._tracked_files:
+                current_paths = set(self.tracked_paths())
+                restore_paths = set(self._tracked_files)
+                for directory in self._tracked_dirs:
+                    restore_paths.update(self._tree_dir_files(repo, tree, directory))
+                selected = (current_paths | restore_paths) - self._restore_excluded
+                for filepath in sorted(selected):
                     content = self._read_blob_from_tree(repo, tree, filepath)
+                    dest = self._workspace / filepath
                     if content is not None:
-                        dest = self._workspace / filepath
-                        dest.write_text(content, encoding="utf-8")
-                        restored.append(filepath)
-
-            if not restored:
-                return None
-
-            msg = f"revert: undo {commit}"
-            return self.auto_commit(msg)
+                        atomic_write_text(dest, content)
+                    elif dest.exists():
+                        dest.unlink()
+            return True
         except Exception as exc:
             raise GitStoreError(f"Git revert failed for {commit}") from exc
 

@@ -253,7 +253,7 @@ async def test_gateway_webui_bootstrap_message_and_thread_hydration(tmp_path: Pa
                 "turn_id": "smoke-turn",
             }))
             answer = await _recv_until(ws, "message")
-            assert "Current model: `custom/smoke-model`" in answer["text"]
+            assert "当前模型：`custom/smoke-model`" in answer["text"]
             await _recv_until(ws, "turn_end")
 
             await ws.send(json.dumps({
@@ -287,7 +287,7 @@ async def test_gateway_webui_bootstrap_message_and_thread_hydration(tmp_path: Pa
             if event.get("event") in {"user_message", "message", "stream_end"}
         ]
         assert "/model" in contents
-        assert any("Current model: `custom/smoke-model`" in text for text in contents)
+        assert any("当前模型：`custom/smoke-model`" in text for text in contents)
         assert "!echo shell-ok" in contents
         assert shell["text"] in contents
         [shell_history] = [event for event in thread["events"] if event.get("event") == "message"

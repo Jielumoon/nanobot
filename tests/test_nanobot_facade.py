@@ -537,7 +537,7 @@ async def test_ephemeral_goal_is_rejected_without_changing_session(
         else:
             result = await bot.run("/goal temporary task", session_key=key, ephemeral=True)
 
-        assert result.content == "Goals can't start in a temporary session. Use a persistent session for `/goal`."
+        assert result.content == "临时会话无法启动长任务，请在持久会话中使用 `/goal`。"
         provider.chat_stream_with_retry.assert_not_awaited()
         prepare_input.assert_not_awaited()
         assert loop.sessions.read_session_file(key) == before

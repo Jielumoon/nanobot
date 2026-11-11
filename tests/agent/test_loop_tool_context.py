@@ -106,6 +106,25 @@ def test_loop_from_config_uses_caller_owned_registry(tmp_path: Path) -> None:
     assert loop.tools.has("read_file")
 
 
+def test_loop_from_config_connects_memory_embedding_provider(tmp_path: Path) -> None:
+    config = _config_for_loop(tmp_path)
+    config.agents.defaults.memory.embedding.enabled = True
+    config.providers.openai.api_key = "configured-embedding-key"
+    config.providers.openai.api_base = "https://vectors.example/v1"
+    config.providers.openai.use_proxy = True
+    config.network.proxy = "http://proxy.example:8080"
+    loop = AgentLoop.from_config(
+        config, tool_registry=ToolRegistry(), provider=_provider_for_loop(),
+    )
+
+    embeddings = loop.context.memory.embeddings
+    assert embeddings is not None
+    assert embeddings.provider is config.providers.openai
+    assert embeddings.api_base == "https://vectors.example/v1"
+    assert embeddings.proxy == "http://proxy.example:8080"
+    assert loop.tools.has("memory_search")
+
+
 @pytest.mark.parametrize("provider_name", ["openrouter", "aihubmix"])
 def test_loop_uses_pre_registered_image_tool(
     tmp_path: Path,

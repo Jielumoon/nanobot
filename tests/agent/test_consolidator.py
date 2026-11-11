@@ -26,7 +26,9 @@ from nanobot.session.manager import Session
 from nanobot.utils.llm_runtime import LLMRuntime
 from nanobot.utils.prompt_templates import render_template
 
-_ARCHIVE_PROMPT = render_template("agent/consolidator_archive.md", strip=True)
+_ARCHIVE_PROMPT = render_template(
+    "agent/consolidator_archive.md", strip=True, claims_enabled=True,
+)
 
 
 @pytest.fixture

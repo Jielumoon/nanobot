@@ -122,6 +122,10 @@ class AgentRunSpec:
     continuation_callback: ContinuationCallback | None = None
     finalize_on_max_iterations: bool = True
     provider_state: ProviderConversationState | None = None
+    context_generation: str | None = None
+    refresh_context: Callable[
+        [Iterable[list[dict[str, Any]]], str | None], str | None,
+    ] | None = None
     llm_usage_source: LLMUsageSource | None = None
     events: EventSink = NO_EVENTS
 
@@ -399,6 +403,7 @@ class AgentRunner:
             state=spec.provider_state,
             session_id=spec.session_key,
             checkpoint_callback=checkpoint_compaction,
+            context_generation=spec.context_generation,
         )
         governance_config = ContextGovernanceConfig(
             provider=spec.runtime.provider,
@@ -896,6 +901,16 @@ class AgentRunner:
         request_state: ModelRequestState,
         transcript: list[dict[str, Any]] | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if spec.refresh_context is not None:
+            compaction = request_state.compaction
+            generation = await self.prepare_prompt(
+                spec.refresh_context,
+                (compaction.raw_messages, compaction.accepted_messages, messages),
+                compaction.active_summary,
+            )
+            if generation is not None:
+                request_state.conversation.replace_transcript(compaction.raw_messages)
+                request_state.conversation.context_generation = generation
         messages, provider_context = await self.context_governor.prepare_request(
             request_state,
             messages,

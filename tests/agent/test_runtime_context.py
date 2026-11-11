@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from nanobot.runtime_context import (
     MAX_WEBUI_QUOTE_CHARS,
     RUNTIME_CONTEXT_HISTORY_META,
     RUNTIME_CONTEXT_INPUT_META,
+    RUNTIME_CONTEXT_MESSAGE_META,
     WEBUI_QUOTE_METADATA,
     WEBUI_QUOTE_SOURCE,
     RuntimeContextBlock,
@@ -168,3 +170,66 @@ def test_webui_preview_title_and_backfill_hide_runtime_context() -> None:
     event = _session_user_event("websocket:chat", persisted)
     assert event is not None
     assert event["text"] == "visible user text"
+
+
+@pytest.mark.parametrize("multimodal", [False, True])
+def test_session_replay_omits_only_memory_context_and_preserves_storage(multimodal: bool) -> None:
+    visible = [{"type": "text", "text": "继续"}] if multimodal else "继续"
+    content, marker = append_runtime_context(visible, [
+        RuntimeContextBlock(source="goal", content="当前目标\n\n保持目标"),
+        RuntimeContextBlock(source="memory_recall", content="过时的记忆\n\n不可重放"),
+        RuntimeContextBlock(source="cli_app", content="CLI 附件"),
+    ])
+    session = Session(key="cli:test", messages=[{
+        "role": "user", "content": content, RUNTIME_CONTEXT_HISTORY_META: marker,
+    }])
+    persisted = deepcopy(session.messages)
+    replay = session.get_history()[0]["content"]
+    expected, _ = append_runtime_context(visible, [
+        RuntimeContextBlock(source="goal", content="当前目标\n\n保持目标"),
+        RuntimeContextBlock(source="cli_app", content="CLI 附件"),
+    ])
+    assert replay == expected
+    assert session.messages == persisted
+    assert session.get_history(include_runtime_context=False)[0]["content"] == visible
+
+
+def test_session_replay_preserves_existing_runtime_context_without_parts() -> None:
+    suffix = "\n\n".join(("保留目标\n\n详细内容", "保留附件"))
+    session = Session(key="cli:test", messages=[{
+        "role": "user", "content": "继续\n\n" + suffix,
+        RUNTIME_CONTEXT_HISTORY_META: {
+            "version": 1, "sources": ["goal", "attachment"], "suffix": suffix,
+        },
+    }])
+    assert session.get_history()[0]["content"] == "继续\n\n" + suffix
+    assert session.get_history(include_runtime_context=False)[0]["content"] == "继续"
+
+
+def test_session_replay_keeps_source_mapping_after_injection_merge() -> None:
+    from nanobot.agent.context_governance import ContextGovernor
+
+    left, left_marker = append_runtime_context("先做第一步", [
+        RuntimeContextBlock(source="goal", content="目标信息"),
+        RuntimeContextBlock(source="memory_recall", content="第一轮记忆"),
+    ])
+    right, right_marker = append_runtime_context("再做第二步", [
+        RuntimeContextBlock(source="memory_recall", content="第二轮记忆"),
+        RuntimeContextBlock(source="attachment", content="附件信息"),
+    ])
+    messages = ContextGovernor._merge_adjacent_user_messages_for_model([{
+        "role": "user", "content": left,
+        "_meta": {RUNTIME_CONTEXT_MESSAGE_META: left_marker},
+    }, {
+        "role": "user", "content": right,
+        "_meta": {RUNTIME_CONTEXT_MESSAGE_META: right_marker},
+    }])
+    merged = messages[0]
+    session = Session(key="cli:test", messages=[{
+        "role": "user", "content": merged["content"],
+        RUNTIME_CONTEXT_HISTORY_META: merged["_meta"][RUNTIME_CONTEXT_MESSAGE_META],
+    }])
+    text = session.get_history()[0]["content"]
+    assert "先做第一步" in text and "再做第二步" in text
+    assert "目标信息" in text and "附件信息" in text
+    assert "第一轮记忆" not in text and "第二轮记忆" not in text

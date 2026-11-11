@@ -20,36 +20,15 @@ from nanobot.utils.gitstore import CommitInfo
 
 
 class _FakeStore:
-    def __init__(
-        self,
-        git,
-        last_dream_cursor: int = 1,
-        dream_prompt_result=None,
-        content_diff: str = "",
-    ):
+    def __init__(self, git, last_dream_cursor: int = 1):
         self.git = git
         self._last_dream_cursor = last_dream_cursor
-        self._dream_prompt_result = dream_prompt_result
-        self._content_diff = content_diff
-        self.compact_history_called = False
 
     def get_last_dream_cursor(self) -> int:
         return self._last_dream_cursor
 
-    def build_dream_prompt(self):
-        return self._dream_prompt_result
-
-    def build_dream_tools(self):
-        return None
-
-    def set_last_dream_cursor(self, value: int) -> None:
-        self._last_dream_cursor = value
-
-    def dream_content_diff(self) -> str:
-        return self._content_diff
-
-    def compact_history(self) -> None:
-        self.compact_history_called = True
+    def restore_memory(self, sha: str, *, message_prefix: str) -> str | None:
+        return self.git.revert(sha, message_prefix=message_prefix)
 
 
 class _FakeGit:
@@ -123,7 +102,7 @@ def _make_ctx(raw: str, git: _FakeGit, *, args: str = "", last_dream_cursor: int
 
 def _make_dream_ctx(tmp_path) -> tuple[CommandContext, _FakeBus]:
     msg = InboundMessage(channel="cli", sender_id="u1", chat_id="direct", content="/dream")
-    store = _FakeStore(_FakeGit(initialized=False), dream_prompt_result=None)
+    store = MemoryStore(tmp_path / "workspace")
     bus = _FakeBus()
     loop = SimpleNamespace(
         bus=bus,
@@ -170,7 +149,8 @@ async def test_dream_no_history_explains_how_to_create_input(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_dream_internal_run_silences_progress(tmp_path) -> None:
     msg = InboundMessage(channel="feishu", sender_id="u1", chat_id="chat1", content="/dream")
-    store = _FakeStore(_FakeGit(initialized=False), dream_prompt_result=("dream prompt", 123))
+    store = MemoryStore(tmp_path / "workspace")
+    store.append_history("需要整理的对话")
     bus = _FakeBus()
     calls = []
     progress_sentinel = "private Dream progress sentinel"
@@ -219,17 +199,19 @@ def _build_runnable_dream(
     content_diff: str,
     stop_reason: str = "completed",
     tool_error: bool = False,
-) -> tuple[CommandContext, _FakeStore]:
-    """Build a /dream ctx whose run is driven by a canned stop reason + diff."""
+) -> tuple[CommandContext, MemoryStore]:
+    """Exercise the command and shared lifecycle with a controlled model result."""
     msg = InboundMessage(channel="cli", sender_id="u1", chat_id="direct", content="/dream")
-    store = _FakeStore(
-        _FakeGit(initialized=initialized),
-        last_dream_cursor=5,
-        dream_prompt_result=("dream prompt", 42),
-        content_diff=content_diff,
-    )
+    store = MemoryStore(tmp_path / "workspace")
+    for index in range(6):
+        store.append_history(f"记录 {index}")
+    store.set_last_dream_cursor(5)
+    if initialized:
+        store.git.init()
 
     async def process_direct(*args, **kwargs):
+        if content_diff:
+            store.write_soul("# Soul\n- 新的行为规则")
         if tool_error:
             await kwargs["on_progress"](
                 "",
@@ -262,14 +244,14 @@ def _build_runnable_dream(
 async def test_dream_advances_cursor_when_diff_nonempty(tmp_path) -> None:
     ctx, store = _build_runnable_dream(tmp_path, initialized=True, content_diff="SOUL.md: +1 -0")
     await _run_dream_command(ctx)
-    assert store._last_dream_cursor == 42
+    assert store.get_last_dream_cursor() == 6
 
 
 @pytest.mark.asyncio
 async def test_dream_advances_cursor_on_completed_noop(tmp_path) -> None:
     ctx, store = _build_runnable_dream(tmp_path, initialized=True, content_diff="")
     await _run_dream_command(ctx)
-    assert store._last_dream_cursor == 42
+    assert store.get_last_dream_cursor() == 6
     assert "记忆无变更" in ctx.loop.bus.outbound[0].content
 
 
@@ -282,7 +264,7 @@ async def test_dream_keeps_cursor_when_incomplete_with_diff(tmp_path) -> None:
         stop_reason="length",
     )
     await _run_dream_command(ctx)
-    assert store._last_dream_cursor == 5
+    assert store.get_last_dream_cursor() == 5
     assert "记忆整理未完成" in ctx.loop.bus.outbound[0].content
 
 
@@ -295,7 +277,7 @@ async def test_dream_advances_cursor_when_completed_after_tool_error(tmp_path) -
         tool_error=True,
     )
     await _run_dream_command(ctx)
-    assert store._last_dream_cursor == 42
+    assert store.get_last_dream_cursor() == 6
     assert "记忆无变更" in ctx.loop.bus.outbound[0].content
 
 
@@ -340,19 +322,19 @@ async def test_dream_noop_batch_unlocks_following_history(tmp_path) -> None:
     assert store.get_last_dream_cursor() == 20
     next_result = store.build_dream_prompt()
     assert next_result is not None
-    next_prompt, next_cursor = next_result
+    next_prompt, next_cursor = next_result.prompt, next_result.cursor
     assert next_cursor == 21
     assert "entry-21" in next_prompt
     assert "entry-01" not in next_prompt
 
 
 @pytest.mark.asyncio
-async def test_dream_non_git_falls_back_to_completion_gate(tmp_path) -> None:
+async def test_dream_initializes_new_workspace_and_completes(tmp_path) -> None:
     ctx, store = _build_runnable_dream(
         tmp_path, initialized=False, content_diff="", stop_reason="completed",
     )
     await _run_dream_command(ctx)
-    assert store._last_dream_cursor == 42
+    assert store.get_last_dream_cursor() == 6
 
 
 @pytest.mark.asyncio

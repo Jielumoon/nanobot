@@ -1,7 +1,8 @@
 import pytest
 
 from nanobot.agent.memory import MemoryStore
-from nanobot.config.schema import ModelPresetConfig
+from nanobot.agent.memory_dreams import DreamBatch
+from nanobot.config.schema import MemoryConfig, ModelPresetConfig
 from nanobot.providers.base import LLMResponse
 from nanobot.security.workspace_access import (
     bind_workspace_scope,
@@ -13,7 +14,7 @@ from nanobot.utils.prompt_templates import render_template
 
 @pytest.fixture
 def store(tmp_path):
-    s = MemoryStore(tmp_path)
+    s = MemoryStore(tmp_path, config=MemoryConfig(claims_enabled=False, daily_notes=False))
     s.write_soul("# Soul\n- Helpful")
     s.write_memory("# Memory\n- Project X active")
     return s
@@ -27,7 +28,7 @@ class TestBuildDreamPrompt:
         store.append_history("hello")
         result = store.build_dream_prompt()
         assert result is not None
-        prompt, cursor = result
+        prompt, cursor = result.prompt, result.cursor
         assert cursor > 0
         assert "## Conversation History" in prompt
         assert "hello" in prompt
@@ -36,7 +37,7 @@ class TestBuildDreamPrompt:
         store.append_history("first")
         r1 = store.build_dream_prompt()
         assert r1 is not None
-        _, c1 = r1
+        c1 = r1.cursor
 
         assert store.build_dream_prompt() is not None
 
@@ -46,21 +47,21 @@ class TestBuildDreamPrompt:
         store.append_history("second")
         r2 = store.build_dream_prompt()
         assert r2 is not None
-        _, c2 = r2
+        c2 = r2.cursor
         assert c2 > c1
 
     def test_prompt_includes_skill_creator_path(self, store):
         store.append_history("test")
         result = store.build_dream_prompt()
         assert result is not None
-        prompt, _ = result
+        prompt = result.prompt
         assert "skill-creator" in prompt
 
     def test_prompt_does_not_duplicate_current_memory_file_contents(self, store):
         store.append_history("hello")
         result = store.build_dream_prompt()
         assert result is not None
-        prompt, _ = result
+        prompt = result.prompt
         assert "## Current Memory Files" not in prompt
         assert "Project X active" not in prompt
         assert "Helpful" not in prompt
@@ -76,7 +77,7 @@ class TestBuildDreamPrompt:
         result = store.build_dream_prompt()
 
         assert result is not None
-        prompt, _ = result
+        prompt = result.prompt
         assert prompt.startswith("Custom Dream prompt.")
         assert "## Conversation History" in prompt
         assert "keep this fact" in prompt
@@ -89,7 +90,7 @@ class TestBuildDreamPrompt:
         result = store.build_dream_prompt()
 
         assert result is not None
-        prompt, _ = result
+        prompt = result.prompt
         assert "x" * 40_000 not in prompt
         assert "... (truncated)" in prompt
         assert "## Conversation History" in prompt
@@ -103,15 +104,17 @@ class TestBuildDreamPrompt:
         result = store.build_dream_prompt()
 
         assert result is not None
-        prompt, _ = result
-        assert prompt.startswith(store.default_dream_prompt() + "\n\n## Conversation History\n")
+        prompt = result.prompt
+        assert prompt.startswith(
+            store.default_dream_prompt(claims_enabled=False) + "\n\n## Conversation History\n",
+        )
 
     def test_truncates_long_entries_at_1000_chars(self, store):
         long_content = "x" * 2000
         store.append_history(long_content)
         result = store.build_dream_prompt()
         assert result is not None
-        prompt, _ = result
+        prompt = result.prompt
         assert long_content not in prompt
         assert "x" * 1000 in prompt
         assert "x" * 1001 not in prompt
@@ -122,7 +125,7 @@ class TestBuildDreamPrompt:
 
         result = store.build_dream_prompt(max_entries=20)
         assert result is not None
-        prompt, cursor = result
+        prompt, cursor = result.prompt, result.cursor
 
         assert cursor == 20
         assert "entry-01" in prompt
@@ -132,7 +135,7 @@ class TestBuildDreamPrompt:
         store.set_last_dream_cursor(cursor)
         next_result = store.build_dream_prompt(max_entries=20)
         assert next_result is not None
-        next_prompt, next_cursor = next_result
+        next_prompt, next_cursor = next_result.prompt, next_result.cursor
         assert next_cursor == 25
         assert "entry-21" in next_prompt
         assert "entry-25" in next_prompt
@@ -147,7 +150,7 @@ class TestBuildDreamPrompt:
         result = store.build_dream_prompt()
 
         assert result is not None
-        prompt, cursor = result
+        prompt, cursor = result.prompt, result.cursor
         assert cursor == 2
         assert "usable memory" in prompt
 
@@ -194,18 +197,19 @@ class TestDreamRunCompletion:
 
 class TestDreamTools:
     def test_dream_tools_are_restricted_to_file_edits(self, store):
-        tools = store.build_dream_tools()
+        tools = store.build_dream_tools(DreamBatch("", 0, {}))
 
         assert set(tools.tool_names) == {
             "apply_patch",
             "edit_file",
             "read_file",
             "write_file",
+            "memory_reflect",
         }
 
     @pytest.mark.asyncio
     async def test_dream_can_edit_canonical_memory_files(self, store):
-        tools = store.build_dream_tools()
+        tools = store.build_dream_tools(DreamBatch("", 0, {}))
 
         memory_result = await tools.execute(
             "apply_patch",
@@ -245,7 +249,7 @@ class TestDreamTools:
 
     @pytest.mark.asyncio
     async def test_dream_can_write_workspace_skills(self, store):
-        tools = store.build_dream_tools()
+        tools = store.build_dream_tools(DreamBatch("", 0, {}))
         target = store.workspace / "skills" / "demo" / "SKILL.md"
 
         result = await tools.execute(
@@ -261,7 +265,7 @@ class TestDreamTools:
 
     @pytest.mark.asyncio
     async def test_dream_tools_keep_internal_write_scope_under_full_access(self, store):
-        tools = store.build_dream_tools()
+        tools = store.build_dream_tools(DreamBatch("", 0, {}))
         scope = default_workspace_scope(store.workspace, restrict_to_workspace=False)
         outside = store.workspace.parent / f"{store.workspace.name}-outside"
         outside.mkdir()
@@ -296,7 +300,7 @@ class TestDreamTools:
 
     @pytest.mark.asyncio
     async def test_dream_cannot_modify_memory_internal_files(self, store):
-        tools = store.build_dream_tools()
+        tools = store.build_dream_tools(DreamBatch("", 0, {}))
         store.history_file.write_text("before\n", encoding="utf-8")
         store._dream_cursor_file.write_text("1", encoding="utf-8")
 
@@ -337,7 +341,7 @@ class TestDreamTools:
 
     @pytest.mark.asyncio
     async def test_dream_cannot_create_children_under_canonical_files(self, store):
-        tools = store.build_dream_tools()
+        tools = store.build_dream_tools(DreamBatch("", 0, {}))
 
         memory_child = store.memory_file / "evil.txt"
         user_child = store.user_file / "evil.txt"
@@ -452,7 +456,7 @@ class TestEphemeralDirect:
         store.append_history("Dream input")
         dream_prompt = store.build_dream_prompt()
         assert dream_prompt is not None
-        prompt, _ = dream_prompt
+        prompt = dream_prompt.prompt
         provider = MagicMock()
         provider.get_default_model.return_value = "test-model"
         provider.supports_tools = True
@@ -469,8 +473,8 @@ class TestEphemeralDirect:
 
         with patch("nanobot.agent.runner.deepcopy", wraps=deepcopy) as copy_state:
             response = await loop.process_direct(
-                prompt, session_key=MemoryStore.dream_session_key(), ephemeral=True,
-                tools=store.build_dream_tools(), on_progress=_silent,
+                prompt, session_key=f"dream:{dream_prompt.run_id}", ephemeral=True,
+                tools=store.build_dream_tools(dream_prompt), on_progress=_silent,
             )
 
         assert response is not None
@@ -564,7 +568,7 @@ class TestEphemeralDirect:
             "test",
             session_key="dream:handled-tool-error",
             ephemeral=True,
-            tools=store.build_dream_tools(),
+            tools=store.build_dream_tools(DreamBatch("", 0, {})),
         )
 
         assert resp is not None
@@ -586,7 +590,7 @@ class TestEphemeralDirect:
 
         result = store.build_dream_prompt(max_entries=20)
         assert result is not None
-        prompt, cursor = result
+        prompt, cursor = result.prompt, result.cursor
         assert cursor == 20
 
         captured: dict[str, list[dict]] = {}
@@ -611,7 +615,7 @@ class TestEphemeralDirect:
             prompt,
             session_key="dream:test",
             ephemeral=True,
-            tools=store.build_dream_tools(),
+            tools=store.build_dream_tools(DreamBatch("", 0, {})),
         )
 
         messages = captured["messages"]
@@ -643,7 +647,7 @@ class TestEphemeralDirect:
 
         result = store.build_dream_prompt()
         assert result is not None
-        prompt, _ = result
+        prompt = result.prompt
 
         captured: dict[str, list[dict]] = {}
         provider = MagicMock()
@@ -668,7 +672,7 @@ class TestEphemeralDirect:
             prompt,
             session_key=session_key,
             ephemeral=True,
-            tools=store.build_dream_tools(),
+            tools=store.build_dream_tools(DreamBatch("", 0, {})),
         )
 
         messages = captured["messages"]

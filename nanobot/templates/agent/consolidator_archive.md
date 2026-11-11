@@ -33,6 +33,10 @@ Assign each retained fact its best current mark:
 - `[correction]` for the current fact that supersedes conflicting earlier long-term memory
 
 When space is limited, prioritize user corrections and preferences, then solutions, decisions, events, and environment facts.
+{% if claims_enabled %}
+
+For user preferences, corrections, and commitments, append the user's own short wording when available, for example `- [permanent] Prefers pour-over coffee (user: "只喝手冲")`. Include the due date of a commitment as `YYYY-MM-DD` when it is known. Keep project names and progress/decision/status associations explicit. Retain personal information only with actual supporting user words; mark uncertainty as a question instead of a fact. Do not invent quotations or evidence handles: Dream receives runtime-generated handles for these summary lines later.
+{% endif %}
 
 ## Output
 

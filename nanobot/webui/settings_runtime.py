@@ -10,6 +10,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from nanobot.config.errors import ConfigLoadError
 from nanobot.config.loader import resolve_config_env_vars
+from nanobot.config.memory import resolve_embedding_provider
 from nanobot.config.schema import Config
 from nanobot.security.network import is_loopback_host
 from nanobot.webui.settings_contracts import WebUISettingsError
@@ -27,6 +28,9 @@ RUNTIME_CONFIG_PATHS = (
     "agents.defaults.provider_retry_mode",
     "agents.defaults.tool_hint_max_length",
     "agents.defaults.dream.enabled",
+    "agents.defaults.memory.claims_enabled",
+    "agents.defaults.memory.people.enabled",
+    "agents.defaults.memory.embedding.enabled",
     "gateway.host",
     "gateway.port",
     "gateway.restart_mode",
@@ -190,6 +194,20 @@ def update_runtime_config(
         try:
             validated.network.resolve_proxy(True)
         except ValueError as exc:
+            raise WebUISettingsError(str(exc)) from None
+    if (
+        validated.agents.defaults.memory.embedding.enabled
+        and validated.agents.defaults.memory.claims_enabled
+    ) and (
+        {"agents.defaults.memory.embedding.enabled", "agents.defaults.memory.claims_enabled",
+         "network.proxy"} & values.keys()
+    ):
+        try:
+            resolve_embedding_provider(
+                validated.agents.defaults.memory.embedding,
+                validated.providers, validated.network,
+            )
+        except (ValueError, ConfigLoadError) as exc:
             raise WebUISettingsError(str(exc)) from None
     before = runtime_config_payload(config)
     after = runtime_config_payload(validated)

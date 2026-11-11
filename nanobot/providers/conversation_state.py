@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any, cast
 
 from nanobot.providers.base import (
@@ -44,15 +45,18 @@ class ProviderConversationStateController:
         state: ProviderConversationState | None = None,
         session_id: str | None = None,
         checkpoint_callback: Callable[[ProviderConversationState], Awaitable[None]] | None = None,
+        context_generation: str | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
         self._session_id = session_id
         self._checkpoint_callback = checkpoint_callback
+        self.context_generation = context_generation
         self._state = (
             state
             if state is not None
             and provider.can_resume_conversation_state(state, model)
+            and (context_generation is None or (state.context_generation or "") == context_generation)
             else None
         )
         self._boundary = len(messages)
@@ -149,7 +153,10 @@ class ProviderConversationStateController:
         boundary = len(messages)
 
         async def accept_compaction(state: ProviderConversationState) -> None:
-            durable = state.with_pending_messages(durable_pending)
+            durable = replace(
+                state.with_pending_messages(durable_pending),
+                context_generation=self.context_generation,
+            )
             if self._checkpoint_callback is not None:
                 await self._checkpoint_callback(durable)
             self._state = durable
@@ -190,7 +197,7 @@ class ProviderConversationStateController:
                 self._model,
             )
         ):
-            self._state = candidate
+            self._state = replace(candidate, context_generation=self.context_generation)
             self._boundary = len(messages)
             self._seal_boundary(messages)
         elif response.finish_reason == "error" and (

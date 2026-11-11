@@ -8,7 +8,9 @@ import pytest
 
 from nanobot.utils.prompt_templates import render_template
 
-_ARCHIVE_PROMPT = render_template("agent/consolidator_archive.md", strip=True)
+_ARCHIVE_PROMPT = render_template(
+    "agent/consolidator_archive.md", strip=True, claims_enabled=True,
+)
 
 
 class TestNewCommandArchival:
@@ -67,7 +69,7 @@ class TestNewCommandArchival:
         response = await loop._process_message(new_msg, runtime=expected_runtime)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert "已开始新对话" in response.content
 
         session_after = loop.sessions.get_or_create("cli:test")
         assert len(session_after.messages) == 0
@@ -104,7 +106,7 @@ class TestNewCommandArchival:
         response = await loop._process_message(new_msg, runtime=expected_runtime)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert "已开始新对话" in response.content
 
         assert len(scheduled) == 1
         await scheduled[0]
@@ -137,7 +139,7 @@ class TestNewCommandArchival:
         response = await loop._process_message(new_msg, runtime=expected_runtime)
 
         assert response is not None
-        assert "new session started" in response.content.lower()
+        assert "已开始新对话" in response.content
         assert loop.sessions.get_or_create("cli:test").messages == []
 
     @pytest.mark.asyncio

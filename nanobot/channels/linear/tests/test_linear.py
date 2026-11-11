@@ -1327,7 +1327,7 @@ async def test_compaction_uses_temporary_progress_and_a_persistent_outcome(
             ),
         ))
         assert client.activities[0]["content"] == {
-            "type": "thought", "body": "Compressing context\u2026",
+            "type": "thought", "body": "正在压缩上下文……",
         }
         assert client.activities[0]["ephemeral"] is True
 

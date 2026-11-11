@@ -90,6 +90,44 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class MemoryPeopleConfig(Base):
+    """Evidence-backed people pages and recall for explicitly mentioned people."""
+
+    enabled: bool = True
+
+
+class MemoryEmbeddingConfig(Base):
+    """Optional claim vectors; batch_size is the per-Dream backfill budget."""
+
+    enabled: bool = False
+    provider: str = Field(default="openai", min_length=1)
+    model: str = Field(default="text-embedding-3-small", min_length=1)
+    dimensions: int | None = Field(default=None, ge=1)
+    batch_size: int = Field(default=32, ge=1, le=256)
+
+
+class MemoryConfig(Base):
+    """Markdown-backed memory, daily summaries, and bounded current-turn recall.
+
+    The ledger and Markdown own state; ``memory/claims.sqlite3`` is disposable.
+    Disable ``claimsEnabled`` to use legacy file-based memory, and ``dailyNotes``
+    to stop mirroring summaries. Reading existing files never rewrites them.
+    Embeddings are opt-in and require a configured provider; lexical search
+    needs no external service.
+    """
+
+    claims_enabled: bool = True
+    daily_notes: bool = True
+    people: MemoryPeopleConfig = Field(default_factory=MemoryPeopleConfig)
+    embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
+    # Inject at most this many characters of MEMORY.md into the system prompt
+    # and recall matching entries for the current message instead. 0 keeps the
+    # full file. Only applies while claimsEnabled provides the search index.
+    inject_max_chars: int = Field(default=6000, ge=0)
+    recall_limit: int = Field(default=5, ge=1, le=20)
+    commitment_limit: int = Field(default=5, ge=0, le=20)
+
+
 class ProviderAPIConfig(Base):
     """Connection API defaults and custom endpoints' accepted request APIs."""
 
@@ -206,6 +244,7 @@ class AgentDefaults(Base):
         ge=0,
     )
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="before")
     @classmethod
