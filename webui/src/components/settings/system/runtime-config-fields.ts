@@ -37,6 +37,8 @@ export const RUNTIME_CONFIG_FIELDS: RuntimeConfigField[] = [
   { group: "memory", path: "agents.defaults.memory.daily_notes", kind: "boolean" },
   { group: "memory", path: "agents.defaults.memory.people.enabled", kind: "boolean" },
   { group: "memory", path: "agents.defaults.memory.embedding.enabled", kind: "boolean" },
+  { group: "memory", path: "agents.defaults.memory.embedding.provider", kind: "select" },
+  { group: "memory", path: "agents.defaults.memory.embedding.model", kind: "text" },
   { group: "execution", path: "agents.defaults.provider_retry_mode", kind: "toggle", options: ["standard", "persistent"] },
   { group: "execution", path: "agents.defaults.max_tool_iterations", kind: "number", min: 1 },
   { group: "execution", path: "agents.defaults.max_concurrent_subagents", kind: "number", min: 1 },

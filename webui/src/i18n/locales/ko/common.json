@@ -552,6 +552,8 @@
         "agents_defaults_memory_daily_notes": {"label": "일일 요약", "help": "대화 요약을 날짜별로 저장합니다. 꺼도 기존 파일은 유지됩니다."},
         "agents_defaults_memory_people_enabled": {"label": "인물 기억", "help": "근거가 있는 정보를 저장하고 해당 인물이 언급될 때 불러옵니다. 구조화된 기억이 필요합니다."},
         "agents_defaults_memory_embedding_enabled": {"label": "의미 검색", "help": "설정된 임베딩 제공업체를 사용하며 API 요금이 발생할 수 있습니다. Dream이 벡터를 나누어 생성합니다. 서비스 오류 시에도 키워드 검색은 유지됩니다."},
+        "agents_defaults_memory_embedding_provider": {"label": "임베딩 제공업체", "help": "기억 벡터를 만드는 데 사용할 제공업체입니다. API 키는 모델에서 설정합니다."},
+        "agents_defaults_memory_embedding_model": {"label": "임베딩 모델", "help": "기억 벡터를 생성할 모델 이름입니다(예: text-embedding-3-small)."},
         "agents_defaults_dream_enabled": {"label": "기억 정리", "help": "메모리를 자동 정리합니다. 꺼도 기존 메모리는 유지됩니다.\n\n대화의 유용한 정보를 자동으로 정리합니다. 꺼도 기존 기억은 계속 사용합니다."},
         "gateway_heartbeat_enabled": {"label": "주기적 확인", "help": "HEARTBEAT.md의 작업을 정기적으로 확인합니다.\n\nHEARTBEAT.md의 작업을 주기적으로 확인합니다."},
         "gateway_heartbeat_interval_s": {"label": "확인 간격", "help": "하트비트 확인 간격입니다. 단위는 초입니다.\n\n게이트웨이가 시작될 때 기본 주기적 확인을 예약합니다."},

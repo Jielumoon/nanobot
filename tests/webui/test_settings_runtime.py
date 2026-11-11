@@ -313,6 +313,28 @@ def test_memory_embedding_setting_validates_only_selected_provider(tmp_path, mon
     assert load_config(path).agents.defaults.memory.embedding.enabled
 
 
+def test_enabled_memory_embedding_can_switch_to_a_configured_provider_and_model(tmp_path):
+    path = tmp_path / "config.json"
+    config = Config.model_validate({
+        "agents": {"defaults": {"memory": {"embedding": {"enabled": True}}}},
+        "providers": {"compatible": {
+            "apiKey": "configured-key", "apiBase": "https://embedding.example/v1",
+        }},
+    })
+    save_config(config, path)
+
+    payload = update_runtime_config_settings({
+        "agents.defaults.memory.embedding.provider": "compatible",
+        "agents.defaults.memory.embedding.model": "custom-embedding-v2",
+    }, config_path=path)
+
+    saved = load_config(path)
+    assert payload["runtime_config"]["agents.defaults.memory.embedding.provider"] == "compatible"
+    assert payload["runtime_config"]["agents.defaults.memory.embedding.model"] == "custom-embedding-v2"
+    assert saved.agents.defaults.memory.embedding.provider == "compatible"
+    assert saved.agents.defaults.memory.embedding.model == "custom-embedding-v2"
+
+
 def test_proxy_update_skips_embedding_validation_when_claims_are_disabled(tmp_path):
     path = tmp_path / "config.json"
     config = Config()

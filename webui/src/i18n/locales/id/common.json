@@ -552,6 +552,8 @@
         "agents_defaults_memory_daily_notes": {"label": "Ringkasan harian", "help": "Simpan ringkasan percakapan berdasarkan tanggal. Menonaktifkannya tetap menyimpan file yang ada."},
         "agents_defaults_memory_people_enabled": {"label": "Memori orang", "help": "Simpan informasi berbukti dan panggil kembali saat orang tersebut disebut. Memerlukan memori terstruktur."},
         "agents_defaults_memory_embedding_enabled": {"label": "Pencarian semantik", "help": "Gunakan penyedia vektor yang dikonfigurasi; biaya API mungkin berlaku. Dream membuat vektor secara bertahap. Pencarian kata kunci tetap tersedia jika layanan gagal."},
+        "agents_defaults_memory_embedding_provider": {"label": "Penyedia vektor", "help": "Penyedia yang dipakai membuat vektor memori. Atur kunci API-nya di Model."},
+        "agents_defaults_memory_embedding_model": {"label": "Model vektor", "help": "Nama model untuk vektor memori, misalnya text-embedding-3-small."},
         "agents_defaults_dream_enabled": {"label": "Penataan memori", "help": "Atur memori otomatis; menonaktifkan tetap menyimpan memori yang ada.\n\nMenata informasi berguna dari percakapan secara otomatis. Memori yang ada tetap digunakan saat dinonaktifkan."},
         "gateway_heartbeat_enabled": {"label": "Pemeriksaan berkala", "help": "Periksa tugas di HEARTBEAT.md secara berkala.\n\nMemeriksa tugas di HEARTBEAT.md secara berkala."},
         "gateway_heartbeat_interval_s": {"label": "Interval pemeriksaan", "help": "Jeda pemeriksaan heartbeat dalam detik.\n\nGateway menjadwalkan pemeriksaan berkala saat dimulai."},

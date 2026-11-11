@@ -247,11 +247,15 @@ export function RuntimeConfigSettings({
                       id, disabled, "aria-label": text, "aria-describedby": `${id}-help${state.invalidField === field.path ? ` ${errorId}` : ""}`,
                       "aria-invalid": state.invalidField === field.path || undefined,
                     };
-                    const options = field.kind === "preset"
+                    const embeddingProvider = field.path === "agents.defaults.memory.embedding.provider";
+                    const options = embeddingProvider
+                      ? settings.providers.map((provider) => provider.name)
+                      : field.kind === "preset"
                       ? ["", ...new Set(["default", ...settings.model_presets.map((preset) => preset.name)])]
                       : [...field.options ?? []];
                     // Keep a configured preset visible if it is no longer available.
                     if (field.kind === "preset" && current && !options.includes(String(current))) options.push(String(current));
+                    if (embeddingProvider && current && !options.includes(String(current))) options.push(String(current));
                     if (field.path === "network.proxy") return (
                       <div key={field.path} className="px-4 py-4 sm:px-5">
                         <span id={`${id}-help`} className="sr-only">{help}</span>
@@ -286,7 +290,9 @@ export function RuntimeConfigSettings({
                                 value={String(current) || "__none__"} emptyLabel={tr("none")}
                                 providers={options.map((option) => ({ name: option || "__none__", label:
                                   !option ? tr(field.kind === "preset" ? "activeModel" : "none")
-                                    : ["auto", "manual", "standard", "persistent"].includes(option) ? tr(option) : option,
+                                    : embeddingProvider
+                                      ? settings.providers.find((provider) => provider.name === option)?.label ?? option
+                                      : ["auto", "manual", "standard", "persistent"].includes(option) ? tr(option) : option,
                                 }))}
                                 onChange={(next) => state.change(field, next === "__none__" ? "" : next)} />
                             ) : (

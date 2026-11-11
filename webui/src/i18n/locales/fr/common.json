@@ -552,6 +552,8 @@
         "agents_defaults_memory_daily_notes": {"label": "Résumés quotidiens", "help": "Enregistrer les résumés des conversations par date. La désactivation conserve les fichiers existants."},
         "agents_defaults_memory_people_enabled": {"label": "Mémoire des personnes", "help": "Conserver des informations étayées et les rappeler quand une personne est mentionnée. Nécessite la mémoire structurée."},
         "agents_defaults_memory_embedding_enabled": {"label": "Recherche sémantique", "help": "Utiliser le fournisseur de vecteurs configuré ; des frais API peuvent s’appliquer. Dream crée les vecteurs par lots. La recherche par mots-clés reste disponible en cas d’échec."},
+        "agents_defaults_memory_embedding_provider": {"label": "Fournisseur de vecteurs", "help": "Fournisseur utilisé pour créer les vecteurs de mémoire. Configurez sa clé API dans Modèles."},
+        "agents_defaults_memory_embedding_model": {"label": "Modèle de vecteurs", "help": "Nom du modèle pour les vecteurs de mémoire, par exemple text-embedding-3-small."},
         "agents_defaults_dream_enabled": {"label": "Consolidation de la mémoire", "help": "Organisez la mémoire automatiquement ; la désactivation conserve les souvenirs existants.\n\nOrganise les informations utiles des conversations. La mémoire existante reste disponible après désactivation."},
         "gateway_heartbeat_enabled": {"label": "Vérification périodique", "help": "Vérifiez régulièrement les tâches dans HEARTBEAT.md.\n\nRecherche régulièrement des tâches dans HEARTBEAT.md."},
         "gateway_heartbeat_interval_s": {"label": "Intervalle de vérification", "help": "Secondes entre les vérifications du heartbeat.\n\nLa passerelle programme les vérifications à son démarrage."},

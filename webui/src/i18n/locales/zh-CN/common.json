@@ -574,6 +574,14 @@
           "label": "语义检索",
           "help": "使用已配置的向量服务，可能产生 API 费用。Dream 分批生成向量，服务失败时仍可使用关键词检索。"
         },
+        "agents_defaults_memory_embedding_provider": {
+          "label": "向量服务",
+          "help": "用于生成记忆向量的服务商。请在「模型」中配置它的 API 密钥。"
+        },
+        "agents_defaults_memory_embedding_model": {
+          "label": "向量模型",
+          "help": "生成记忆向量的模型名，例如 text-embedding-3-small。"
+        },
         "gateway_heartbeat_enabled": {
           "label": "心跳任务",
           "help": "定期检查 HEARTBEAT.md 任务\n\n定期检查 HEARTBEAT.md 中的任务。"

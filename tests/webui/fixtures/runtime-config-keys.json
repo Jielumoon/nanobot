@@ -13,6 +13,8 @@
   "agents.defaults.memory.daily_notes",
   "agents.defaults.memory.people.enabled",
   "agents.defaults.memory.embedding.enabled",
+  "agents.defaults.memory.embedding.provider",
+  "agents.defaults.memory.embedding.model",
   "gateway.host",
   "gateway.port",
   "gateway.restart_mode",

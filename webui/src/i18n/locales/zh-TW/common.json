@@ -552,6 +552,8 @@
         "agents_defaults_memory_daily_notes": {"label": "每日摘要", "help": "按日期儲存對話摘要；關閉後保留現有檔案。"},
         "agents_defaults_memory_people_enabled": {"label": "人物記憶", "help": "只記錄有證據的資訊，提到該人物時召回；需啟用結構記憶。"},
         "agents_defaults_memory_embedding_enabled": {"label": "語意檢索", "help": "使用已設定的向量服務，可能產生 API 費用。Dream 分批產生向量，服務失敗時仍可使用關鍵字搜尋。"},
+        "agents_defaults_memory_embedding_provider": {"label": "向量服務", "help": "用於產生記憶向量的服務商。請在「模型」中設定它的 API 金鑰。"},
+        "agents_defaults_memory_embedding_model": {"label": "向量模型", "help": "產生記憶向量的模型名稱，例如 text-embedding-3-small。"},
         "agents_defaults_dream_enabled": {"label": "記憶整理", "help": "自動整理記憶；關閉後仍可用已有記憶\n\n自動整理對話中的有用資訊。關閉後停止整理，已有記憶仍可使用。"},
         "gateway_heartbeat_enabled": {"label": "定期檢查", "help": "定期檢查 HEARTBEAT.md 任務\n\n定期檢查 HEARTBEAT.md 中的任務。"},
         "gateway_heartbeat_interval_s": {"label": "檢查間隔", "help": "心跳任務的檢查間隔，單位秒"},

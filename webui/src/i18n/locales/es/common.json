@@ -552,6 +552,8 @@
         "agents_defaults_memory_daily_notes": {"label": "Resúmenes diarios", "help": "Guarda los resúmenes de las conversaciones por fecha. Al desactivarlos se conservan los archivos existentes."},
         "agents_defaults_memory_people_enabled": {"label": "Memoria de personas", "help": "Guarda información respaldada por pruebas y la recupera al mencionar a una persona. Requiere memoria estructurada."},
         "agents_defaults_memory_embedding_enabled": {"label": "Búsqueda semántica", "help": "Usa el proveedor de vectores configurado; pueden aplicarse cargos de API. Dream genera vectores por lotes. Si el servicio falla, se mantiene la búsqueda por palabras clave."},
+        "agents_defaults_memory_embedding_provider": {"label": "Proveedor de vectores", "help": "Proveedor usado para crear los vectores de memoria. Configura su clave de API en Modelos."},
+        "agents_defaults_memory_embedding_model": {"label": "Modelo de vectores", "help": "Nombre del modelo para los vectores de memoria, por ejemplo text-embedding-3-small."},
         "agents_defaults_dream_enabled": {"label": "Consolidación de memoria", "help": "Organiza la memoria automáticamente; al desactivar, conserva los recuerdos.\n\nOrganiza la información útil de las conversaciones. La memoria existente sigue disponible al desactivarla."},
         "gateway_heartbeat_enabled": {"label": "Comprobación periódica", "help": "Revisa periódicamente las tareas de HEARTBEAT.md.\n\nBusca tareas periódicamente en HEARTBEAT.md."},
         "gateway_heartbeat_interval_s": {"label": "Intervalo de revisión", "help": "Segundos entre revisiones del heartbeat.\n\nLa gateway programa las comprobaciones al iniciarse."},

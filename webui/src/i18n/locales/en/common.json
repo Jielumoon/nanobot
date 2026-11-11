@@ -574,6 +574,14 @@
           "label": "Semantic search",
           "help": "Use the configured embedding provider; API charges may apply. Dream builds vectors in batches. Keyword search remains available if the service fails."
         },
+        "agents_defaults_memory_embedding_provider": {
+          "label": "Embedding provider",
+          "help": "Provider used to create memory vectors. Configure its API key in Models."
+        },
+        "agents_defaults_memory_embedding_model": {
+          "label": "Embedding model",
+          "help": "Model name for memory vectors, such as text-embedding-3-small."
+        },
         "gateway_heartbeat_enabled": {
           "label": "Heartbeat",
           "help": "Check HEARTBEAT.md for tasks regularly.\n\nPeriodically check HEARTBEAT.md for tasks."

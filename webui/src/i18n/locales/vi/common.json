@@ -552,6 +552,8 @@
         "agents_defaults_memory_daily_notes": {"label": "Tóm tắt hằng ngày", "help": "Lưu bản tóm tắt cuộc trò chuyện theo ngày. Tắt tính năng vẫn giữ các tệp hiện có."},
         "agents_defaults_memory_people_enabled": {"label": "Bộ nhớ về người", "help": "Lưu thông tin có bằng chứng và truy xuất khi người đó được nhắc đến. Cần bật bộ nhớ có cấu trúc."},
         "agents_defaults_memory_embedding_enabled": {"label": "Tìm kiếm ngữ nghĩa", "help": "Dùng nhà cung cấp vectơ đã cấu hình; có thể phát sinh phí API. Dream tạo vectơ theo lô. Tìm kiếm từ khóa vẫn hoạt động khi dịch vụ lỗi."},
+        "agents_defaults_memory_embedding_provider": {"label": "Nhà cung cấp vectơ", "help": "Nhà cung cấp dùng để tạo vectơ bộ nhớ. Đặt khóa API trong mục Mô hình."},
+        "agents_defaults_memory_embedding_model": {"label": "Mô hình vectơ", "help": "Tên mô hình tạo vectơ bộ nhớ, ví dụ text-embedding-3-small."},
         "agents_defaults_dream_enabled": {"label": "Sắp xếp bộ nhớ", "help": "Tự động sắp xếp bộ nhớ; tắt vẫn giữ bộ nhớ có sẵn.\n\nTự động sắp xếp thông tin hữu ích từ cuộc trò chuyện. Bộ nhớ hiện có vẫn được sử dụng khi tắt."},
         "gateway_heartbeat_enabled": {"label": "Kiểm tra định kỳ", "help": "Kiểm tra tác vụ trong HEARTBEAT.md định kỳ.\n\nKiểm tra các tác vụ trong HEARTBEAT.md định kỳ."},
         "gateway_heartbeat_interval_s": {"label": "Khoảng kiểm tra", "help": "Số giây giữa các lần kiểm tra heartbeat.\n\nGateway lên lịch kiểm tra định kỳ khi khởi động."},

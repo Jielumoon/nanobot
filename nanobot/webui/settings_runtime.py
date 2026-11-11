@@ -32,6 +32,8 @@ RUNTIME_CONFIG_PATHS = (
     "agents.defaults.memory.daily_notes",
     "agents.defaults.memory.people.enabled",
     "agents.defaults.memory.embedding.enabled",
+    "agents.defaults.memory.embedding.provider",
+    "agents.defaults.memory.embedding.model",
     "gateway.host",
     "gateway.port",
     "gateway.restart_mode",
@@ -201,6 +203,7 @@ def update_runtime_config(
         and validated.agents.defaults.memory.claims_enabled
     ) and (
         {"agents.defaults.memory.embedding.enabled", "agents.defaults.memory.claims_enabled",
+         "agents.defaults.memory.embedding.provider", "agents.defaults.memory.embedding.model",
          "network.proxy"} & values.keys()
     ):
         try:

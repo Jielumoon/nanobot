@@ -21,6 +21,8 @@ function runtimeSettings() {
     "agents.defaults.memory.daily_notes": true,
     "agents.defaults.memory.people.enabled": true,
     "agents.defaults.memory.embedding.enabled": false,
+    "agents.defaults.memory.embedding.provider": "openai",
+    "agents.defaults.memory.embedding.model": "text-embedding-3-small",
     "agents.defaults.session_ttl_minutes": 15,
     "gateway.heartbeat.enabled": true,
     "tools.exec.timeout": 60,
@@ -98,6 +100,37 @@ describe("Runtime configuration settings", () => {
     await waitFor(() => expect(screen.getByRole("switch", { name: label }))
       .toHaveAttribute("aria-checked", String(enabled)));
     expect(memory.getAllByRole("switch")).toHaveLength(5);
+  });
+
+  it("lets semantic search use a configured provider and embedding model", async () => {
+    const payload = runtimeSettings();
+    payload.providers = [
+      { name: "openai", label: "OpenAI", configured: false },
+      { name: "compatible", label: "Compatible API", configured: true },
+    ];
+    payload.runtime_config!["agents.defaults.memory.embedding.enabled"] = true;
+    requestMutationMock.mockImplementation(async (_method: string, args: { values: object }) => ({
+      ...payload, runtime_config: { ...payload.runtime_config, ...args.values },
+    }));
+    renderSettingsView({ initialSection: "runtime", initialSettings: payload });
+    fireEvent.click(screen.getByRole("button", { name: "Capabilities" }));
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Embedding provider" }));
+    fireEvent.click(screen.getByRole("option", { name: "Compatible API" }));
+    await waitFor(() => expect(requestMutationMock).toHaveBeenCalledWith(
+      "settings.runtime_config.update",
+      { values: { "agents.defaults.memory.embedding.provider": "compatible" } },
+      20_000,
+    ));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Embedding model" }), {
+      target: { value: "custom-embedding-v2" },
+    });
+    await waitFor(() => expect(requestMutationMock).toHaveBeenLastCalledWith(
+      "settings.runtime_config.update",
+      { values: { "agents.defaults.memory.embedding.model": "custom-embedding-v2" } },
+      20_000,
+    ));
   });
 
   it("keeps older hosts' supported memory switch usable", async () => {
