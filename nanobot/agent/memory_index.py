@@ -612,6 +612,7 @@ class MemoryIndex:
         hits: list[SearchHit] = []
         candidate_limit = limit * 4 if semantic is not None else limit
         best: list[tuple[tuple[float, bool, bool, str, int], SearchHit]] = []
+        core_lines: dict[str, list[str]] = {}
         with nullcontext(connection) if connection is not None else self.connect() as conn:
             if terms:
                 long_terms = [term for term in terms if len(term) >= 3] if self.fts else []
@@ -657,15 +658,17 @@ class MemoryIndex:
                         and row["expires_at"] <= now
                     ):
                         status = "expired"
+                    legacy_ref = None
+                    if row["scope"] == "core" and row["claim_id"] is None:
+                        path = row["path"]
+                        if path not in core_lines:
+                            core_lines[path] = self.core_text[path].splitlines()
+                        if "<!--" not in core_lines[path][row["line_start"] - 1]:
+                            legacy_ref = legacy_reference(path, row["line_start"], row["text"])
                     hit = SearchHit(
                         row["path"], row["line_start"], row["text"][:_SNIPPET_CHARS],
                         row["selected_id"], row["kind"], score, status, row["person_id"],
-                        legacy_ref=(
-                            legacy_reference(row["path"], row["line_start"], row["text"])
-                            if row["scope"] == "core" and row["claim_id"] is None
-                            and "<!--" not in self.core_text[row["path"]].splitlines()[row["line_start"] - 1]
-                            else None
-                        ),
+                        legacy_ref=legacy_ref,
                     )
                     key = (
                         -hit.score, hit.claim_id is None,

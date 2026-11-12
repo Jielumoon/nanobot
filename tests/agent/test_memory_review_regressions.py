@@ -329,6 +329,31 @@ def test_lexical_search_keeps_bounded_candidates_before_dedup_and_limit(builder)
     assert peak < 512 * 1024
 
 
+def test_core_search_splits_each_file_at_most_once(builder, monkeypatch):
+    claims = builder.memory.claims
+    documents = {
+        path: "\n".join(f"- 检索共同词 {path} 条目{number:03d}" for number in range(20))
+        for path in ("USER.md", "memory/MEMORY.md")
+    }
+    claims.documents.apply(documents)
+    claims.sync_index()
+    core_text = {
+        path: MagicMock(wraps=claims.index.core_text[path]) for path in documents
+    }
+    for path, text in core_text.items():
+        monkeypatch.setitem(claims.index.core_text, path, text)
+
+    hits = claims.index.search(
+        "检索共同词", now="2030-05-03T12:00:00Z", limit=5, min_score=0,
+        exclude=(), include_history=False,
+    )
+
+    assert len(hits) == 5
+    assert all(hit.legacy_ref == f"legacy:{hit.path}:{hit.line}:{digest(hit.text)}" for hit in hits)
+    for text in core_text.values():
+        assert text.splitlines.call_count <= 1
+
+
 async def test_restore_rejects_active_dream_without_changing_cursor(builder):
     store = builder.memory
     store.append_history("新摘要")
