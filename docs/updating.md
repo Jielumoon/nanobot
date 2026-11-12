@@ -2,6 +2,14 @@
 
 Use the update method that owns your installation. If your version does not include the WebUI updater, first upgrade through the original installer or package manager. This does not convert an existing installation into an installer-managed one.
 
+## 微信中的更新回执
+
+微信用户明确要求更新机器人时，先通过 `message` 工具发送开始通知并填写 `update_target`（已选定的版本或提交），等待工具确认通知已送达、回执已保存，再沿用当前部署的更新方式。工具报错时停止更新。回报对象固定为当前微信账号实例与聊天，不需要用户再次确认。
+
+网关将回执保存为配置目录中的私有文件 `update-notice.json`。重启后自动报告实际运行的版本、构建号和原定目标；版本标识未变化时明确提示未确认更新成功，不推测已完成回滚。发送失败会保留回执，在同一微信账号、同一聊天的后续回复前补发，实际发送成功才删除。更新命令和中断的模型任务不会自动重放。
+
+恢复运行的版本需要包含此回执功能。回滚到尚未支持回执的旧版、服务完全无法启动或微信不可用时，不能保证主动通知；待回执文件保留供检查。
+
 ## Upgrade older JSONL installations
 
 The 0.4.x releases retain automatic import of legacy model JSONL history, WebUI JSONL / segments and per-feature proxy settings. You can upgrade an older installation directly to 0.4.1 through its original installation method; an intermediate 0.4.0 installation is not required. These importers are scheduled for removal in 0.5.0.

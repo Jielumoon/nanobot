@@ -375,3 +375,34 @@ async def test_message_tool_cli_context_may_target_other_ws_chat(tmp_path) -> No
     assert result.startswith("Message sent")
     assert sent[0].channel == "websocket"
     assert sent[0].chat_id == target
+
+
+@pytest.mark.parametrize("target", [{"chat_id": "other"}, {"channel": "weixin.personal"}])
+async def test_update_notice_cannot_override_current_wechat_route(target):
+    from unittest.mock import AsyncMock
+
+    send, prepare = AsyncMock(), AsyncMock()
+    tool = MessageTool(send_callback=send)
+    tool.set_update_notice_callback(prepare)
+    with request_context(RequestContext(channel="weixin.work", chat_id="owner")):
+        result = await tool.execute("开始更新", update_target="v0.4.1-fork.6", **target)
+    assert "当前微信会话" in result
+    prepare.assert_not_awaited()
+    send.assert_not_awaited()
+
+
+async def test_update_notice_cannot_run_during_suppressed_delivery():
+    from unittest.mock import AsyncMock
+
+    send, prepare = AsyncMock(), AsyncMock()
+    tool = MessageTool(send_callback=send)
+    tool.set_update_notice_callback(prepare)
+    token = tool.set_suppress_delivery(True)
+    try:
+        with request_context(RequestContext(channel="weixin.work", chat_id="owner")):
+            result = await tool.execute("开始更新", update_target="v0.4.1-fork.6")
+        assert "停止本次更新" in result
+        prepare.assert_not_awaited()
+        send.assert_not_awaited()
+    finally:
+        tool.reset_suppress_delivery(token)

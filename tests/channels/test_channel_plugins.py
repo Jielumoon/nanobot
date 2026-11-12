@@ -3673,7 +3673,7 @@ async def test_start_all_creates_dispatch_task():
 
 
 @pytest.mark.asyncio
-async def test_notify_restart_done_waits_until_channel_starts():
+async def test_notify_restart_done_waits_until_channel_starts(tmp_path):
     fake_config = SimpleNamespace(
         channels=ChannelsConfig(),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
@@ -3682,6 +3682,7 @@ async def test_notify_restart_done_waits_until_channel_starts():
     mgr = ChannelManager.__new__(ChannelManager)
     mgr.config = fake_config
     mgr.bus = MessageBus()
+    mgr._config_path = tmp_path / "config.json"
     channel = _StartableChannel(fake_config, mgr.bus)
     mgr.channels = {"feishu": channel}
     mgr._dispatch_task = None

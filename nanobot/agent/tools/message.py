@@ -58,6 +58,10 @@ def capture_message_deliveries() -> Generator[set[tuple[str, str]], None, None]:
             ArraySchema(StringSchema("Button label")),
             description="Optional: inline keyboard buttons as list of rows, each row is list of button labels.",
         ),
+        update_target=StringSchema(
+            "仅用于用户明确要求的自身更新：填写已选定的目标版本或提交，"
+            "在当前微信会话发送开始通知并保存重启回执。成功后再执行更新；失败时停止更新。"
+        ),
         required=["content"],
     )
 )
@@ -74,6 +78,7 @@ class MessageTool(Tool):
         restrict_to_workspace: bool = False,
     ):
         self._send_callback = send_callback
+        self._update_notice_callback: Callable[[OutboundMessage, str], Awaitable[None]] | None = None
         self._workspace = (
             Path(workspace).expanduser() if workspace is not None else get_workspace_path()
         )
@@ -100,6 +105,11 @@ class MessageTool(Tool):
         """Set the callback for sending messages."""
         self._send_callback = callback
 
+    def set_update_notice_callback(
+        self, callback: Callable[[OutboundMessage, str], Awaitable[None]],
+    ) -> None:
+        self._update_notice_callback = callback
+
     def set_suppress_delivery(self, active: bool) -> Token[bool]:
         """Acknowledge but don't deliver tool sends (heartbeat internal check)."""
         return self._suppress_delivery_var.set(active)
@@ -118,7 +128,8 @@ class MessageTool(Tool):
             "Send separate messages requested by the user or task, optionally with attachments. "
             "For normal replies, including scheduled reminders and reports, answer directly; "
             "the final reply is delivered to the current chat automatically. "
-            "Use this tool to deliver generated images via media."
+            "Use this tool to deliver generated images via media. "
+            "微信用户要求更新自身时，必须先用 update_target 发送开始通知，成功后再执行更新。"
         )
 
     def _resolve_media(self, media: list[str]) -> list[str]:
@@ -146,6 +157,7 @@ class MessageTool(Tool):
         message_id: str | None = None,
         media: list[str] | None = None,
         buttons: Any = None,
+        update_target: str | None = None,
         **kwargs: Any,
     ) -> str:
         from nanobot.utils.helpers import strip_think
@@ -212,6 +224,19 @@ class MessageTool(Tool):
         if not self._send_callback:
             return ToolResult.error("Error: Message sending not configured")
 
+        if update_target is not None:
+            if not isinstance(update_target, str) or not 1 <= len(update_target.strip()) <= 120 or any(
+                char in update_target for char in "\r\n"
+            ):
+                return ToolResult.error("更新目标须为 1–120 个字符的单行版本或提交标识")
+            update_target = update_target.strip()
+            if request_ctx is None or not same_target or channel.split(".", 1)[0] != "weixin":
+                return ToolResult.error("更新回执只能绑定当前微信会话，不能指定其他回报对象")
+            if media or button_rows or not content.strip():
+                return ToolResult.error("更新开始通知必须是非空的纯文本")
+            if self._update_notice_callback is None or self._suppress_delivery_var.get():
+                return ToolResult.error("当前运行方式不能确认微信通知已送达，请停止本次更新")
+
         if media:
             try:
                 media = self._resolve_media(media)
@@ -239,15 +264,24 @@ class MessageTool(Tool):
             ) if request_ctx is not None else None),
         )
 
+        if update_target is not None and msg.delivery is not None:
+            return ToolResult.error("请在微信会话中直接发起更新，不能由定时任务代为触发")
+
         if self._suppress_delivery_var.get():
             logger.debug("MessageTool: delivery suppressed during internal check")
             return f"Message acknowledged for {channel}:{chat_id} (not delivered)"
 
         try:
-            await self._send_callback(msg)
+            if update_target is not None:
+                assert self._update_notice_callback is not None
+                await self._update_notice_callback(msg, update_target)
+            else:
+                await self._send_callback(msg)
             sends = _CURRENT_MESSAGE_SENDS.get()
             if sends is not None:
                 sends.add((channel, chat_id))
+            if update_target is not None:
+                return "开始通知已送达，更新回执已保存；现在可按现有方式执行已授权的更新。"
             media_info = f" with {len(media)} attachments" if media else ""
             button_info = (
                 f" with {sum(len(row) for row in button_rows)} button(s)"
@@ -257,4 +291,6 @@ class MessageTool(Tool):
             action = "queued" if msg.delivery is not None else "sent"
             return f"Message {action} to {channel}:{chat_id}{media_info}{button_info}"
         except Exception as e:
+            if update_target is not None:
+                return ToolResult.error(f"更新通知失败，请停止本次更新：{e}")
             return ToolResult.error(f"Error sending message: {str(e)}")

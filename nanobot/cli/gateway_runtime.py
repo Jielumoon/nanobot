@@ -792,6 +792,8 @@ def _run_claimed_gateway(
         webui_discard_session=agent.discard_session,
         config_path=Path(config_path),
     )
+    if isinstance(message_tool, MessageTool):
+        message_tool.set_update_notice_callback(channels.prepare_update_notice)
 
     async def _pick_heartbeat_target() -> tuple[str, str]:
         archived_keys = await ensure_webui_session_archives(session_manager.state)

@@ -33,6 +33,7 @@ from nanobot.channels.contracts import (
     channel_runtime_name,
     resolve_channel_action_target,
 )
+from nanobot.channels.notification_routes import notification_metadata
 from nanobot.channels.outbox import RETRY_SECONDS, DeliveryOutbox
 from nanobot.channels.registry import channel_default_enabled
 from nanobot.config.schema import Config
@@ -42,6 +43,9 @@ from nanobot.utils.restart import (
     RestartNotice,
     consume_restart_notice_from_env,
     format_restart_completed_message,
+    format_update_completed_message,
+    read_update_notice,
+    save_update_notice,
 )
 
 if TYPE_CHECKING:
@@ -151,6 +155,9 @@ class ChannelManager:
         self._channel_tasks: dict[str, asyncio.Task[None]] = {}
         self._dispatch_task: asyncio.Task[None] | None = None
         self._restart_notice_task: asyncio.Task[None] | None = None
+        self._update_notice: RestartNotice | None = None
+        self._prepared_update_notice: RestartNotice | None = None
+        self._update_notice_lock = asyncio.Lock()
         self._outbound_tasks: dict[asyncio.Task[None], tuple[str, str]] = {}
         self._outbound_tails: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._outbound_batches: dict[tuple[str, str], list[OutboundMessage]] = {}
@@ -643,10 +650,77 @@ class ChannelManager:
 
     def _notify_restart_done_if_needed(self) -> asyncio.Task[None] | None:
         notice = consume_restart_notice_from_env()
+        try:
+            self._update_notice = read_update_notice(self._config_path.parent / "update-notice.json")
+        except (OSError, ValueError):
+            logger.exception("无法读取更新回执，保留文件以便检查")
+        notice = self._update_notice or notice
         if not notice:
             return None
         self._restart_notice_task = asyncio.create_task(self._send_restart_notice_when_started(notice))
         return self._restart_notice_task
+
+    async def prepare_update_notice(self, msg: OutboundMessage, update_target: str) -> None:
+        """更新前留存来源，并等待开始通知实际发送成功。"""
+        from nanobot import __version__
+        from nanobot.build_info import COMMIT
+
+        channel = self.channels.get(msg.channel)
+        if channel is None or not channel.is_running:
+            raise ChannelNotReadyError("微信通道尚未就绪，请稍后再更新")
+        await self._send_pending_update_notice(msg.channel, msg.chat_id)
+        path = self._config_path.parent / "update-notice.json"
+        async with self._update_notice_lock:
+            previous = read_update_notice(path)
+            if previous is not None and (
+                previous != self._prepared_update_notice
+                or (previous.channel, previous.chat_id) != (msg.channel, msg.chat_id)
+            ):
+                raise ValueError("已有待发送的更新回执，请先等待更新结果")
+            notice = RestartNotice(
+                channel=msg.channel, chat_id=msg.chat_id, started_at_raw=str(time.time()),
+                metadata=notification_metadata(msg.channel, msg.metadata),
+                update_target=update_target, previous_version=__version__, previous_commit=COMMIT,
+            )
+            save_update_notice(path, notice)
+            msg.delivery_id = f"update-start:{notice.started_at_raw}"
+            msg.metadata = {**msg.metadata, "_weixin_delivery_id": msg.delivery_id}
+            try:
+                if not await self._send_with_retry(channel, msg):
+                    raise ChannelNotReadyError("更新前通知未送达，请停止本次更新")
+            except BaseException:
+                if previous is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    save_update_notice(path, previous)
+                raise
+            self._prepared_update_notice = notice
+
+    async def _send_pending_update_notice(
+        self, channel_name: str, chat_id: str, *, deadline: float | None = None,
+    ) -> None:
+        notice = self._update_notice
+        if notice is None or (notice.channel, notice.chat_id) != (channel_name, chat_id):
+            return
+        async with self._update_notice_lock:
+            if self._update_notice is not notice:
+                return
+            channel = self.channels.get(channel_name)
+            if channel is None or not channel.is_running:
+                return
+            delivery_id = f"update-complete:{notice.started_at_raw}"
+            message = OutboundMessage(
+                channel=channel_name, chat_id=chat_id,
+                content=format_update_completed_message(notice),
+                metadata={
+                    **notification_metadata(channel_name, notice.metadata),
+                    "_weixin_delivery_id": delivery_id,
+                },
+                delivery_id=delivery_id,
+            )
+            if await self._send_with_retry(channel, message, deadline=deadline):
+                (self._config_path.parent / "update-notice.json").unlink(missing_ok=True)
+                self._update_notice = None
 
     async def _send_restart_notice_when_started(
         self,
@@ -679,6 +753,10 @@ class ChannelManager:
                 )
                 return
             await asyncio.sleep(min(poll_s, remaining))
+
+        if notice.update_target is not None:
+            await self._send_pending_update_notice(notice.channel, notice.chat_id, deadline=deadline)
+            return
 
         await self._send_with_retry(
             target,
@@ -817,6 +895,7 @@ class ChannelManager:
             if self._outbound_batches.get(key) is messages:
                 self._outbound_batches.pop(key, None)
             batch = tuple(messages)
+            await self._send_pending_update_notice(msg.channel, msg.chat_id)
             if len(batch) > 1:
                 async with self._outbound_sends:
                     # Partial delivery must never cause a blind replay of the batch.
@@ -1148,7 +1227,7 @@ class ChannelManager:
         msg: OutboundMessage,
         *,
         deadline: float | None = None,
-    ) -> None:
+    ) -> bool:
         max_attempts = max(self.config.channels.send_max_retries, 1)
         attempt = 0
 
@@ -1158,18 +1237,18 @@ class ChannelManager:
                     await self._outbound_sends.acquire()
             except TimeoutError:
                 logger.warning("Send to {} deadline expired waiting for a send slot", msg.channel)
-                return
+                return False
             try:
                 try:
                     if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                         logger.warning("Send to {} deadline expired before submission", msg.channel)
-                        return
+                        return False
                     attempt += 1
                     # The deadline bounds admission, not an already-submitted send.
                     await self._send_once(channel, msg)
                 finally:
                     self._outbound_sends.release()
-                return
+                return True
             except asyncio.CancelledError:
                 raise  # Propagate cancellation for graceful shutdown
             except Exception as e:
@@ -1180,7 +1259,7 @@ class ChannelManager:
                         type(e).__name__,
                         e,
                     )
-                    return
+                    return False
                 loop = asyncio.get_running_loop()
                 exhausted = (
                     attempt >= max_attempts
@@ -1192,7 +1271,7 @@ class ChannelManager:
                         "Failed to send to {} after {} attempts",
                         msg.channel, attempt,
                     )
-                    return
+                    return False
                 base = _SEND_RETRY_DELAYS[min(attempt - 1, len(_SEND_RETRY_DELAYS) - 1)]
                 delay = random.uniform(base / 2, base)
                 if deadline is not None:

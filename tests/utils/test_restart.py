@@ -90,3 +90,23 @@ def test_should_show_cli_restart_notice():
     non_cli = RestartNotice(channel="feishu", chat_id="oc_1", started_at_raw="100")
     assert should_show_cli_restart_notice(non_cli, "cli:direct") is False
 
+
+def test_update_report_distinguishes_builds_with_the_same_package_version(monkeypatch):
+    import nanobot
+    import nanobot.build_info
+    from nanobot.utils.restart import format_update_completed_message
+
+    monkeypatch.setattr(nanobot, "__version__", "0.4.1")
+    monkeypatch.setattr(nanobot.build_info, "COMMIT", "a" * 40)
+    notice = RestartNotice(
+        channel="weixin", chat_id="owner", started_at_raw="123",
+        update_target="v0.4.1-fork.6", previous_version="0.4.1", previous_commit="a" * 40,
+    )
+    assert "未确认更新成功" in format_update_completed_message(notice)
+
+    monkeypatch.setattr(nanobot.build_info, "COMMIT", "b" * 40)
+    content = format_update_completed_message(notice)
+    assert "当前版本：0.4.1（bbbbbbbbb）" in content
+    assert "更新前：0.4.1（aaaaaaaaa）" in content
+    assert "v0.4.1-fork.6" in content and "未确认更新成功" not in content
+

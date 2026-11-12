@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -547,3 +549,137 @@ async def test_restart_notice_deadline_does_not_cancel_submitted_send(tmp_path):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_update_notice_survives_a_fresh_gateway_without_environment(tmp_path, monkeypatch):
+    import nanobot.build_info
+
+    monkeypatch.setattr(nanobot.build_info, "COMMIT", "b" * 40)
+    path = tmp_path / "update-notice.json"
+    path.write_text(json.dumps({
+        "channel": "weixin.work", "chat_id": "owner", "started_at_raw": "123",
+        "update_target": "v0.4.1-fork.6", "previous_version": "0.4.1",
+        "previous_commit": "a" * 40,
+    }))
+    manager, channel = make_manager(config_path=tmp_path / "config.json")
+    manager.channels = {"weixin.work": channel}
+    channel.is_running = True
+    task = manager._notify_restart_done_if_needed()
+    assert task is not None
+    await task
+    channel.send.assert_awaited_once()
+    message = channel.send.await_args.args[0]
+    assert (message.channel, message.chat_id) == ("weixin.work", "owner")
+    assert "v0.4.1-fork.6" in message.content and "bbbbbbbbb" in message.content
+    assert message.delivery_id is not None
+    assert not path.exists()
+    assert manager._notify_restart_done_if_needed() is None
+
+
+async def test_update_notice_retries_before_same_chat_reply_after_failed_start(tmp_path):
+    from nanobot.bus.delivery import ChannelNotReadyError
+
+    path = tmp_path / "update-notice.json"
+    path.write_text(json.dumps({
+        "channel": "weixin.work", "chat_id": "owner", "started_at_raw": "123",
+        "update_target": "v0.4.1-fork.6", "previous_version": "0.4.1",
+        "previous_commit": "a" * 40,
+    }))
+    manager, channel = make_manager(config_path=tmp_path / "config.json")
+    manager.channels = {"weixin.work": channel, "weixin.personal": channel}
+    channel.is_running = True
+    channel.should_retry_send_error.return_value = False
+    channel.send.side_effect = ChannelNotReadyError("需要新的微信消息上下文")
+    task = manager._notify_restart_done_if_needed()
+    assert task is not None
+    await task
+    assert path.exists()
+    receipt_id = channel.send.await_args.args[0].metadata["_weixin_delivery_id"]
+
+    channel.send.side_effect = None
+    channel.send.reset_mock()
+    try:
+        for route in (("weixin.personal", "owner"), ("weixin.work", "other")):
+            await manager._queue_outbound(channel, OutboundMessage(*route, "其他会话回复"))
+            await wait_until(lambda: not manager._outbound_tasks)
+        assert channel.send.await_count == 2 and path.exists()
+
+        channel.send.reset_mock()
+        await manager._queue_outbound(channel, OutboundMessage("weixin.work", "owner", "正常回复"))
+        await wait_until(lambda: not manager._outbound_tasks)
+        assert channel.send.await_count == 2
+        assert "v0.4.1-fork.6" in channel.send.await_args_list[0].args[0].content
+        assert channel.send.await_args_list[0].args[0].metadata["_weixin_delivery_id"] == receipt_id
+        assert channel.send.await_args_list[1].args[0].content == "正常回复"
+        assert not path.exists()
+    finally:
+        await manager._cancel_outbound()
+
+
+async def test_update_preparation_waits_for_wechat_and_saves_private_receipt(tmp_path):
+    from nanobot.agent.tools.context import RequestContext, request_context
+    from nanobot.agent.tools.message import MessageTool
+
+    manager, channel = make_manager(config_path=tmp_path / "config.json")
+    manager.channels = {"weixin.work": channel}
+    channel.is_running = True
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def send(msg):
+        started.set()
+        await release.wait()
+
+    channel.send.side_effect = send
+    queued = AsyncMock()
+    tool = MessageTool(send_callback=queued, workspace=tmp_path)
+    tool.set_update_notice_callback(manager.prepare_update_notice)
+    with request_context(RequestContext(
+        channel="weixin.work", chat_id="owner", session_key="weixin.work:owner",
+        metadata={"context_token": "private-context", "_turn_id": "finished-turn"},
+    )):
+        task = asyncio.create_task(tool.execute("开始更新", update_target="v0.4.1-fork.6"))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert not task.done()
+        path = tmp_path / "update-notice.json"
+        notice = json.loads(path.read_text())
+        assert (notice["channel"], notice["chat_id"]) == ("weixin.work", "owner")
+        assert notice["metadata"] == {}
+        if os.name == "posix":
+            assert path.stat().st_mode & 0o777 == 0o600
+        release.set()
+        assert "已送达" in await task
+        queued.assert_not_awaited()
+        await manager._queue_outbound(channel, OutboundMessage("weixin.work", "owner", "继续处理"))
+        await wait_until(lambda: not manager._outbound_tasks)
+        assert [call.args[0].content for call in channel.send.await_args_list] == ["开始更新", "继续处理"]
+        assert path.exists()
+        with request_context(RequestContext(channel="weixin.work", chat_id="owner")):
+            retried = await tool.execute("重新尝试更新", update_target="v0.4.1-fork.7")
+        assert "已送达" in retried
+        assert json.loads(path.read_text())["update_target"] == "v0.4.1-fork.7"
+    finally:
+        release.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await manager._cancel_outbound()
+
+
+async def test_failed_update_start_notice_stops_preparation(tmp_path):
+    from nanobot.agent.tools.context import RequestContext, request_context
+    from nanobot.agent.tools.message import MessageTool
+    from nanobot.bus.delivery import ChannelNotReadyError
+
+    manager, channel = make_manager(config_path=tmp_path / "config.json")
+    manager.channels = {"weixin.work": channel}
+    channel.is_running = True
+    channel.should_retry_send_error.return_value = False
+    channel.send.side_effect = ChannelNotReadyError("需要新的微信消息上下文")
+    queued = AsyncMock()
+    tool = MessageTool(send_callback=queued, workspace=tmp_path)
+    tool.set_update_notice_callback(manager.prepare_update_notice)
+    with request_context(RequestContext(channel="weixin.work", chat_id="owner")):
+        result = await tool.execute("开始更新", update_target="v0.4.1-fork.6")
+    assert "停止本次更新" in result
+    assert not (tmp_path / "update-notice.json").exists()
+    queued.assert_not_awaited()
