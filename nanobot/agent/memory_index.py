@@ -38,6 +38,9 @@ _MAX_QUERY_TERMS = 32
 _SNIPPET_CHARS = 300
 _FORGOTTEN = "[已遗忘]"
 _VECTOR_MIN_SIMILARITY = 0.3
+# Short memory rankings need head/tail separation: a single rank-2 hit should
+# outrank a hit at rank 6 in both lists, rather than rewarding weak agreement.
+_RRF_RANK_OFFSET = 1
 QueryEmbedding = tuple[str, Sequence[float]]
 # Frequent function words carry no topic signal for recall.
 _CJK_STOP_WORDS = frozenset({
@@ -752,7 +755,7 @@ class MemoryIndex:
         for ranking in (lexical, semantic):
             for rank, hit in enumerate(ranking, 1):
                 key = hit.claim_id or (hit.path, hit.line)
-                scores[key] = scores.get(key, 0.0) + 1.0 / (60 + rank)
+                scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_RANK_OFFSET + rank)
                 hits.setdefault(key, hit)
         return [replace(hits[key], score=scores[key])
                 for key in sorted(scores, key=lambda key: scores[key], reverse=True)]

@@ -222,6 +222,45 @@ async def test_embedding_search_fuses_lexical_and_semantic_results_in_worker(sto
     assert result[0]["text"] == "早上只喝拿铁"
 
 
+async def test_semantic_head_survives_many_weak_dual_matches(store, api):
+    target = "Update the relay service last"
+    texts = ["A strong semantic match", target]
+    texts += [f"Related background {n}" for n in range(10)]
+    texts += [f"queue weak note {n}" for n in range(8)]
+    for rank, text in enumerate(texts):
+        similarity = 0.99 - rank * 0.03
+        api.vectors[text] = [similarity, math.sqrt(1 - similarity**2)]
+        store.claims.remember(ClaimDraft(text=text, kind="fact"))
+    api.vectors["queue"] = [1.0, 0.0]
+    for _ in range(10):
+        assert await store.backfill_embeddings() == 2
+    results = json.loads(await MemorySearchTool(store).execute("queue", limit=5))["results"]
+    assert len(results) == 5
+    assert target in {item["text"] for item in results}
+
+
+async def test_below_threshold_vectors_do_not_add_irrelevant_results(store, api):
+    api.default = [0.0, 1.0]
+    store.claims.remember(ClaimDraft(text="A fact with an exact ZXQ98473 token", kind="fact"))
+    assert await store.backfill_embeddings() == 1
+    api.vectors["ZXQ98473"] = [1.0, 0.0]
+    api.vectors["unrelated question"] = [1.0, 0.0]
+    exact = json.loads(await MemorySearchTool(store).execute("ZXQ98473"))["results"]
+    assert len(exact) == 1 and "ZXQ98473" in exact[0]["text"]
+    assert json.loads(await MemorySearchTool(store).execute("unrelated question"))["results"] == []
+
+
+async def test_weak_lexical_match_survives_when_vectors_are_below_threshold(store, api):
+    api.default = [0.0, 1.0]
+    store.claims.remember(ClaimDraft(text="queue unrelated background", kind="fact"))
+    store.claims.remember(ClaimDraft(text="Other information", kind="fact"))
+    assert await store.backfill_embeddings() == 2
+    query = "queue timing question"
+    api.vectors[query] = [1.0, 0.0]
+    results = json.loads(await MemorySearchTool(store).execute(query))["results"]
+    assert [item["text"] for item in results] == ["queue unrelated background"]
+
+
 async def test_semantic_runtime_recall_filters_scope_before_top_k(store, api):
     store.config.recall_limit = 1
     api.default = [1.0, 0.0]
