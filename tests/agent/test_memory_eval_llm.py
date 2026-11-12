@@ -58,7 +58,9 @@ async def test_memory_llm_eval_runs_pipeline_and_reports_missing_evidence(
     config = Config.model_validate({
         "agents": {"defaults": {
             "workspace": str(original), "model": "eval-model", "provider": "custom",
-            "maxTokens": 2048, "contextWindowTokens": 32000,
+            # This scripted provider has no responses for automatic mid-Dream
+            # compaction. Leave headroom for tool schemas and memory instructions.
+            "maxTokens": 2048, "contextWindowTokens": 64000,
             "memory": {"claimsEnabled": False},
         }},
         "providers": {"custom": {

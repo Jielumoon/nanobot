@@ -28,6 +28,7 @@ Clock = Callable[[], datetime]
 MARKER_RE = re.compile(r"[ \t]*<!--\s*claim:(c_[0-9a-f]{12})(?:\s+(\{.*?\}))?\s*-->")
 CLAIM_REF_RE = re.compile(r"<!--\s*claim:(c_[0-9a-f]{12})(?=\s|-->|$)")
 AUDIT_REF_RE = re.compile(r"<!-- audit-claim:(c_[0-9a-f]{12}) -->")
+LEGACY_REF_RE = re.compile(r"legacy:(?:USER\.md|memory/MEMORY\.md):[1-9]\d*:[0-9a-f]{64}")
 CLAIM_COMMENT_RE = re.compile(r"[ \t]*<!--\s*claim:.*?(?:-->|$)", re.MULTILINE)
 ENTITY_RE = re.compile(r"<!--\s*entity:(\S+)\s+(\{.*?\})\s*-->")
 ENTITY_COMMENT_RE = re.compile(r"[ \t]*<!--\s*entity:.*?(?:-->|$)", re.MULTILINE)
@@ -72,6 +73,11 @@ def local_day(value: str, tz: str = "UTC") -> str:
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def legacy_reference(path: str, line: int, text: str) -> str:
+    """Address one unmarked core line without pretending it is already a claim."""
+    return f"legacy:{path}:{line}:{digest(text)}"
 
 
 def strip_claim_markers(text: str) -> str:
@@ -150,6 +156,7 @@ class ClaimDraft(BaseModel):
     due_at: str | None = None
     expires_at: str | None = None
     supersedes: tuple[str, ...] = ()
+    supersedes_legacy: tuple[str, ...] = Field(default=(), max_length=10)
     person_id: str | None = None
     project_id: str | None = None
     person: str | None = None
@@ -186,6 +193,13 @@ class ClaimDraft(BaseModel):
     @classmethod
     def ids(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return ClaimMetadata.ids(values)
+
+    @field_validator("supersedes_legacy")
+    @classmethod
+    def legacy_refs(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if any(LEGACY_REF_RE.fullmatch(value) is None for value in values):
+            raise ValueError("supersedes_legacy 须使用 memory_search 返回的旧核心记忆引用")
+        return tuple(dict.fromkeys(values))
 
 
 class Claim(ClaimMetadata):

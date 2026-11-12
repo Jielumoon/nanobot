@@ -572,7 +572,7 @@
         },
         "agents_defaults_memory_embedding_enabled": {
           "label": "Semantic search",
-          "help": "Use the configured embedding provider; API charges may apply. Dream builds vectors in batches. Keyword search remains available if the service fails."
+          "help": "Use the configured embedding provider; API charges may apply. Restart the engine after changing semantic search, its provider, or its model. Dream then builds existing memory vectors in batches, not immediately on save or restart. Keyword search remains available if the service fails."
         },
         "agents_defaults_memory_embedding_provider": {
           "label": "Embedding provider",

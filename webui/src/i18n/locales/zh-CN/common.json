@@ -572,7 +572,7 @@
         },
         "agents_defaults_memory_embedding_enabled": {
           "label": "语义检索",
-          "help": "使用已配置的向量服务，可能产生 API 费用。Dream 分批生成向量，服务失败时仍可使用关键词检索。"
+          "help": "使用已配置的向量服务，可能产生 API 费用。修改语义检索、向量服务或模型后需重启引擎生效；已有记忆随后由 Dream 分批生成向量，不会在保存或重启时立即生成。服务失败时仍可使用关键词检索。"
         },
         "agents_defaults_memory_embedding_provider": {
           "label": "向量服务",

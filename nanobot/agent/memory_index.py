@@ -25,6 +25,7 @@ from nanobot.agent.memory_documents import (
     decode_entity,
     digest,
     iso,
+    legacy_reference,
     line_text,
     marked_claim_ids,
     utc_now,
@@ -107,12 +108,16 @@ class SearchHit:
     score: float
     status: str = "active"
     person_id: str | None = None
+    legacy_ref: str | None = None
 
     def to_public(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "source": f"{self.path}:{self.line}", "claim_id": self.claim_id,
             "kind": self.kind, "text": self.text, "status": self.status,
         }
+        if self.legacy_ref is not None:
+            result["legacy_ref"] = self.legacy_ref
+        return result
 
 
 class MemoryIndex:
@@ -652,6 +657,12 @@ class MemoryIndex:
                     hit = SearchHit(
                         row["path"], row["line_start"], row["text"][:_SNIPPET_CHARS],
                         row["selected_id"], row["kind"], score, status, row["person_id"],
+                        legacy_ref=(
+                            legacy_reference(row["path"], row["line_start"], row["text"])
+                            if row["scope"] == "core" and row["claim_id"] is None
+                            and "<!--" not in self.core_text[row["path"]].splitlines()[row["line_start"] - 1]
+                            else None
+                        ),
                     )
                     key = (
                         -hit.score, hit.claim_id is None,

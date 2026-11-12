@@ -178,6 +178,31 @@ class ClaimStore:
         }.get(draft.kind, "facts")
         return f"memory/bank/{bank}.md"
 
+    def _legacy_claims(self, references: Sequence[str], snapshot: dict[str, str]) -> list[Claim]:
+        """Resolve searched core lines; preserve unknown provenance as unknown."""
+        claims: list[Claim] = []
+        with self.index.connect() as conn:
+            for reference in references:
+                path, number, content_hash = reference.removeprefix("legacy:").rsplit(":", 2)
+                row = conn.execute("""
+                    SELECT text FROM chunks WHERE path=? AND line_start=? AND content_hash=?
+                      AND claim_id IS NULL AND scope='core' AND current=1
+                """, (path, int(number), content_hash)).fetchone()
+                if row is None:
+                    raise ValueError("旧记忆引用已失效或已遗忘，请重新 memory_search")
+                lines = snapshot.get(path, "").splitlines()
+                raw = lines[int(number) - 1] if int(number) <= len(lines) else ""
+                if digest(line_text(raw)) != content_hash:
+                    raise ValueError("旧记忆引用已失效或已遗忘，请重新 memory_search")
+                if "<!--" in raw or HEADING_RE.match(raw):
+                    raise ValueError("只能纠正无标记的旧核心正文行")
+                claims.append(Claim(
+                    claim_id=f"c_{uuid4().hex[:12]}", text=row["text"],
+                    evidence=Evidence(source_ref=reference),
+                    source_file=path, source_line=int(number), is_core=True,
+                ))
+        return claims
+
     def remember(
         self, draft: ClaimDraft, *, session_key: str | None = None,
         message_id: str | None = None, actor: str = "user", run_id: str | None = None,
@@ -206,6 +231,10 @@ class ClaimStore:
                     pages[entity.entity_id] = entity, path
                     links[f"{kind}_id"] = entity.entity_id
             draft = draft.model_copy(update=links)
+            legacy = self._legacy_claims(draft.supersedes_legacy, snapshot)
+            path = self._target(draft, pages)
+            if legacy and any(old.source_file != path for old in legacy):
+                raise ValueError("旧核心纠正须设置 core=true 并写回同一核心文件；不支持跨文件迁移")
             entity_events = [
                 LedgerEvent(
                     target_type="entity", target_id=entity_id,
@@ -231,12 +260,17 @@ class ClaimStore:
                 """, (
                     draft.text, draft.kind, iso(self.clock()), draft.person_id, draft.project_id,
                 )).fetchone()
-                if duplicate is not None and not draft.supersedes:
+                if duplicate is not None and not draft.supersedes and not legacy:
                     self.documents.apply(changes)
                     self.documents.append_events(entity_events)
                     self.index.sync(changes)
                     return RememberResult(self.index.row_claim(duplicate), False)
-            path = self._target(draft, pages)
+            superseded.extend(legacy)
+            for old in legacy:
+                assert old.source_file is not None and old.source_line is not None
+                lines = changes.get(old.source_file, snapshot[old.source_file]).splitlines()
+                lines[old.source_line - 1] = encode_claim(old, timezone=self.timezone)
+                changes[old.source_file] = "\n".join(lines) + "\n"
             claim = Claim.model_construct(
                 claim_id=f"c_{uuid4().hex[:12]}", created_at=now, updated_at=now,
                 evidence=Evidence.model_construct(
@@ -245,7 +279,10 @@ class ClaimStore:
                     source_timestamp=source_timestamp, source_kind=source_kind,
                     history_lines=history_lines,
                 ),
-                **draft.model_dump(exclude={"quote", "core", "person", "project", "aliases"}),
+                supersedes=tuple(old.claim_id for old in superseded),
+                **draft.model_dump(exclude={
+                    "quote", "core", "person", "project", "aliases", "supersedes", "supersedes_legacy",
+                }),
             )
             heading = SECTIONS[draft.kind]
             if draft.project_id:
@@ -262,6 +299,10 @@ class ClaimStore:
             self.documents.apply(changes)
             self.documents.append_events([
                 *entity_events,
+                *(LedgerEvent(
+                    target_type="claim", target_id=old.claim_id, action="remember",
+                    actor=actor, at=now, run_id=run_id, source_ref=old.evidence.source_ref,
+                ) for old in legacy),
                 LedgerEvent(
                     target_type="claim", target_id=claim.claim_id, action="remember",
                     actor=actor, at=now, run_id=run_id, source_ref=source_ref,

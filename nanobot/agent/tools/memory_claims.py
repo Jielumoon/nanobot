@@ -111,6 +111,16 @@ class _MemoryClaimTool(Tool):
             max_items=10,
             nullable=True,
         ),
+        supersedes_legacy=ArraySchema(
+            StringSchema("legacy_ref from memory_search"),
+            description="Exact unmarked USER.md/MEMORY.md lines this memory corrects. Copy "
+            "legacy_ref from memory_search; changed or forgotten lines are rejected. Old text "
+            "is archived with unknown original provenance, not permanently deleted. Requires "
+            "core=true and replacement in the same core file (preference for USER.md; other "
+            "kinds for MEMORY.md). Correct each core file separately; no project/person routing.",
+            max_items=10,
+            nullable=True,
+        ),
         project=StringSchema("Project name or entity ID; reuse an existing name/alias if known."),
         person=StringSchema("Person name or entity ID. Requires quote or a verifiable turn source."),
         aliases=ArraySchema(
@@ -141,7 +151,8 @@ class MemoryRememberTool(_MemoryClaimTool):
             "Use project/person to link entities; project pages take precedence over person pages. "
             "Person information requires evidence and people.enabled. Core is for stable memory. "
             "For a correction, call memory_search first and pass the outdated "
-            "claim_id in supersedes. Do not use this for passing remarks; background memory "
+            "claim_id in supersedes; for unmarked core lines, pass the returned legacy_ref in "
+            "supersedes_legacy. Do not use this for passing remarks; background memory "
             "consolidation handles those."
         )
 
@@ -155,6 +166,7 @@ class MemoryRememberTool(_MemoryClaimTool):
         due_at: str | None = None,
         expires_at: str | None = None,
         supersedes: list[str] | None = None,
+        supersedes_legacy: list[str] | None = None,
         project: str | None = None, person: str | None = None,
         aliases: list[str] | None = None,
         source: str | None = None,
@@ -173,6 +185,7 @@ class MemoryRememberTool(_MemoryClaimTool):
                 "text": text, "kind": kind, "quote": quote, "confidence": confidence,
                 "core": core, "due_at": due_at, "expires_at": expires_at,
                 "supersedes": supersedes if supersedes is not None else [],
+                "supersedes_legacy": supersedes_legacy if supersedes_legacy is not None else [],
                 "project": project, "person": person, "aliases": aliases or [],
             }, context={"timezone": self._store.timezone})
             if self._dream is not None:
@@ -234,7 +247,8 @@ class MemorySearchTool(_MemoryClaimTool):
         return (
             "Search saved memory in core, bank, projects, people, and daily notes. Returns "
             "matching lines with file:line sources and claim_ids for memory_remember supersedes "
-            "or memory_forget. Use it when the answer may depend on something remembered that "
+            "or memory_forget. Unmarked core lines also return legacy_ref for "
+            "memory_remember supersedes_legacy. Use it when the answer may depend on something remembered that "
             "is not in the current prompt."
         )
 
