@@ -818,6 +818,7 @@ class AgentLoop:
             log_content=ctx.session.policy.log_content and not ctx.ephemeral,
             persist_session=ctx.session.policy.persist and not ctx.ephemeral,
             can_receive_background_results=self._running,
+            background_exec=self._background_exec,
         )
 
     async def _resolve_runtime_context_for_turn(

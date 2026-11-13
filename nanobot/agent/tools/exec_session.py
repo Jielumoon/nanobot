@@ -448,6 +448,7 @@ class ExecSessionManager:
         return bool(
             self._lock.locked() or self._starting or self._stopping_launches
             or self._background_tasks
+            or (self.background_exec is not None and self.background_exec.has_pending_work)
             or any(s.has_pending_work for s in self._sessions.values())
         )
 
@@ -562,6 +563,11 @@ class ExecSessionManager:
         if self.background_exec is None or ctx is None:
             raise KeyError(session_id)
         record = await self.background_exec.get(session_id, ctx)
+        if record.kind == "mcp":
+            if terminate:
+                await self.background_exec.cancel_mcp(session_id)
+                return await self.background_exec.get(session_id, ctx)
+            return record
         async with self._lock:
             session = self._sessions.get(session_id)
             starting = self._starting.get(session_id)
@@ -688,6 +694,8 @@ class ExecSessionManager:
         count = await self._stop_owned(sessions, launches, "shutdown")
         if self._background_tasks:
             await asyncio.gather(*tuple(self._background_tasks.values()))
+        if self.background_exec is not None:
+            await self.background_exec.close()
         return count
 
     async def terminate_by_owner(self, owner_session_key: str) -> int:
@@ -703,7 +711,10 @@ class ExecSessionManager:
             for sid, (owner, _) in list(self._starting.items()):
                 if owner == owner_session_key:
                     self._starting.pop(sid)
-        return await self._stop_owned(victims, launches, "owner_closed")
+        count = await self._stop_owned(victims, launches, "owner_closed")
+        if self.background_exec is not None:
+            count += await self.background_exec.cancel_mcp_by_session(owner_session_key)
+        return count
 
     async def _stop_owned(
         self, sessions: list[_ExecSession], launches: list[asyncio.Task[_ExecSession]],
@@ -828,7 +839,7 @@ def format_session_poll(session_id: str, poll: _SessionPoll) -> str:
 
 @tool_parameters(
     tool_parameters_schema(
-        session_id=StringSchema("Session ID returned by exec."),
+        session_id=StringSchema("exec 或 MCP 后台调用返回的会话/任务 ID。"),
         input=StringSchema(
             "Text to send to stdin; omit to poll output.",
             nullable=True,
@@ -838,7 +849,7 @@ def format_session_poll(session_id: str, poll: _SessionPoll) -> str:
             default=False,
         ),
         terminate=BooleanSchema(
-            description="Terminate the session; use alone.",
+            description="单独使用：终止命令进程树，或取消本地 MCP 等待；后者不代表远端任务已停止。",
             default=False,
         ),
         wait_for=StringSchema(
@@ -900,7 +911,7 @@ class ExecSessionTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Manage a session returned by exec. Background IDs return bounded status/log snapshots; terminate cancels the process tree."
+        return "读取 exec 会话或后台任务的状态与结果。后台 ID 立即返回快照；terminate 终止命令进程树或取消本地 MCP 等待，不确认远端任务停止。"
 
     async def execute(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
@@ -918,7 +929,7 @@ class ExecSessionTool(Tool):
             output_limit = clamp_session_int(max_output_chars, DEFAULT_MAX_OUTPUT_CHARS, 1000, MAX_OUTPUT_CHARS)
             if session_id.startswith("bg_"):
                 if input is not None or close_stdin or wait_for is not None or until_exit or timeout_ms is not None:
-                    return ToolResult.error("后台命令只支持立即查询或 terminate；不支持 stdin 或前台等待。")
+                    return ToolResult.error("后台任务只支持立即查询或 terminate；不支持 stdin 或前台等待。")
                 record = await self._manager.read_background(session_id, terminate=terminate)
                 result = record.public_result(output_limit)
                 return ToolResult.error(result) if record.status in {"failed", "cancelled", "interrupted"} else result

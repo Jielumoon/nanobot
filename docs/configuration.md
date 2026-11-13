@@ -2396,7 +2396,31 @@ Silence is not proof that a command is stuck: builds, downloads, and buffered pr
 
 gateway 正常关闭会清理所管理的命令并记录中断。重新启动只恢复未消费完成事件，把遗留 `starting/running` 标为 `interrupted`，不自动重跑命令、不凭 PID 认领进程；硬崩溃后无法保证旧进程已停止。执行中输出有界保存在内存，查询或完成时保存快照，硬崩溃可能丢失最后一段输出。已消费事件的 agent 接续若被中断，沿用会话 checkpoint/用户显式继续，不自动重放副作用。结果目前不自动过期。
 
-此能力仅管理本地原生命令，不把已有 MCP 调用转为后台任务。MCP 工具仍受其 `toolTimeout`（默认 30 秒）、传输层和远端各自限制；HTTP 读超时已随配置延长，但这不会消除其他层的超时。要后台执行长等待 MCP，还需显式的调用入口来绑定原工具及参数、保留连接/授权生命周期，并把原结果交回此会话事件路径；当前没有这个接口。T3 的远端 thread/run ID 不等于本地后台 ID，也没有因此获得自动回调；本地超时或取消不能证明远端副作用终止。
+### MCP 后台等待
+
+调用原 MCP 工具时，可增加仅由 nanobot 消费的 `_nanobot_background` 参数。以下是原 T3 `t3_thread_wait` 注册工具的调用参数，工具名称以实际注册的名称为准：
+
+```json
+{
+  "threadId": "远端线程 ID",
+  "runId": "远端运行 ID",
+  "timeoutMs": 60000,
+  "untilDelegatedWorkSettled": true,
+  "_nanobot_background": {"timeout_s": 1800}
+}
+```
+
+这仍是对原 MCP 工具的调用，沿用原 registry、会话可见范围、allowlist 和执行授权，不增加工具名解析旁路。`_nanobot_background` 不发送给远端；`timeout_s` 必须显式给出，范围 1–86400 秒，表示整个本地后台等待的上限。原工具立即返回 `bg_…` ID，前台回合结束后调用仍由 gateway 持有，继续使用原 MCP 连接与授权。最多同时运行 8 个后台 MCP 调用；不支持后台结果消费者的单次宿主、临时会话或 subagent 不提供此能力。
+
+结果和取消复用 `exec_session`（需启用 `tools.exec.enable`）。结果的 `kind` 为 `mcp`，`mcp_result` 保存原 MCP 返回值，包括 `content`、`structuredContent` 和 `isError`；`output` 是有界渲染文本，MCP 没有进程退出码，`exit_code` 为 `null`。原始 MCP 返回值另行保留，不按日志字符上限裁切。完成事件仍只唤醒原会话，由 agent 读取结果、必要时调用原 T3 读取工具取得交付，再决定用户回复；事件入队、agent 接续和微信实际送达是三个不同阶段。
+
+普通 MCP 后台调用只执行一次：该次 RPC 返回即表示本地调用完成，不保证远端业务任务完成。只有原工具名为 `t3_thread_wait` 时，才按其结构化契约处理 `timedOut` 与运行状态；明确仍运行或等待超时时继续同一 thread/run 的只读等待。未传 `runId` 时，在首次待完成响应中锁定返回的运行 ID。`resultRun` 用于判断最终运行的结果；失败、取消、中断或回滚不会报为成功。`next` 只是 T3 给前台调用者的回合提示，不是远端终态，也不是 nanobot 已获得远端推送。
+
+T3 单次窗口 `timeoutMs` 至少为 1000，默认 60000；最后一窗按剩余总预算缩短。每次 SDK 调用使用该窗口加最多 5 秒余量及剩余总预算，而不是前台 `toolTimeout` 的默认 30 秒。提前返回待完成状态时也按该窗口节奏等待，不紧密轮询、不周期性唤醒模型。已有 HTTP 连接读超时和远端限制仍然有效，建议使用 60 秒的分窗等待，不把一窗拉长为整个任务时长。
+
+后台路径不自动重连或通用重试，绝不重发 launch/send 等调用。真正的连接错误、工具错误或本地总时限到期会如实失败。`exec_session` 的 `terminate: true`、会话停止/删除以及 gateway 关闭都可停止本地等待，但本地取消或超时不能证明远端任务已停止，若需停止远端任务，应另行明确调用其原生取消接口。重启只恢复已保存的结果与未消费事件，把旧的未完成等待标记为 `interrupted`，不重新连接、自动重发或恢复等待。
+
+与动态加载提交 `72e0dc3bd` 整合时无需另写分支适配：其 `MCPToolRegistry` 在会话启用后物化同一个 `MCPToolWrapper`，新参数随原工具 schema 暴露，调用仍经该会话 registry；未启用或未授权的工具不会因后台模式而获得入口。本分支没有合并或修改该动态加载实现。
 
 
 With a Unix sandbox enabled, the selected shell and any requested login profile run inside the sandbox, with its workspace-scoped `HOME`. Custom interpreters outside the exposed system paths require an explicit read-only bind. Tool PATH settings affect commands inside the sandbox, not selection of the host launcher. By default, install `bwrap` in the operating system's default executable search path (normally `/bin:/usr/bin`); a custom parent or tool `PATH` cannot override that launcher. Seatbelt defaults to `/usr/bin/sandbox-exec`. For a protected nonstandard installation, set `sandboxLauncher` instead of changing the host's global `/bin` or adding writable directories to the launcher search path. A missing, rejected, or failed launcher never falls back to unsandboxed execution.

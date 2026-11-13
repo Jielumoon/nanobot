@@ -10,13 +10,14 @@ import traceback
 import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, suppress
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 import httpx
 from loguru import logger
 
 from nanobot.agent.tools.base import Tool, ToolResult
-from nanobot.agent.tools.context import tool_log_content_allowed
+from nanobot.agent.tools.context import current_request_context, tool_log_content_allowed
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.config.network import NetworkConfig
 from nanobot.security.network import (
@@ -715,6 +716,17 @@ class MCPToolWrapper(_MCPWrapperBase):
         self._description = tool_def.description or tool_def.name
         raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
+        self._parameters.setdefault("properties", {})["_nanobot_background"] = {
+            "type": "object",
+            "description": (
+                "显式后台调用：立即返回本地任务 ID，完成后接续原会话；用 exec_session 读取或取消本地等待。"
+                "timeout_s 是总等待上限，不沿用前台 toolTimeout。仅 t3_thread_wait 会继续同一 run 的只读等待。"
+                "取消/超时不代表远端任务已停止；其他工具只调用一次。"
+            ),
+            "properties": {"timeout_s": {"type": "integer", "minimum": 1, "maximum": 86400}},
+            "required": ["timeout_s"],
+            "additionalProperties": False,
+        }
         self._tool_timeout = tool_timeout
         # Replay is opt-in through explicit server declarations, not inferred
         # from names or destructiveHint=False (additive writes can duplicate).
@@ -741,6 +753,19 @@ class MCPToolWrapper(_MCPWrapperBase):
         return self._parameters
 
     async def execute(self, **kwargs: Any) -> str:
+        background = kwargs.pop("_nanobot_background", None)
+        if background is not None:
+            ctx = current_request_context()
+            if ctx is None or ctx.background_exec is None:
+                return ToolResult.error("当前宿主不支持 MCP 后台结果回传")
+            timeout_s = background["timeout_s"]
+            if self._original_name == "t3_thread_wait" and kwargs.get("timeoutMs", 60000) < 1000:
+                return ToolResult.error("T3 后台等待的 timeoutMs 至少为 1000，避免紧密轮询")
+            session = self._session
+            return await ctx.background_exec.start_mcp(
+                ctx, self.name, kwargs, timeout_s,
+                lambda: self._background_call(session, kwargs, timeout_s),
+            )
         result = await self._request_with_recovery(
             lambda session: session.call_tool(self._original_name, arguments=kwargs),
             self._tool_timeout,
@@ -763,6 +788,48 @@ class MCPToolWrapper(_MCPWrapperBase):
             return ToolResult.error(
                 f"(MCP tool returned malformed content: {type(exc).__name__})"
             )
+
+    async def _background_call(
+        self, session: ClientSession, arguments: dict[str, Any], timeout_s: int,
+    ) -> tuple[str, dict[str, Any], bool]:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        params = dict(arguments)
+        is_t3_wait = self._original_name == "t3_thread_wait"
+        window_ms = params.get("timeoutMs", 60000)
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise TimeoutError
+            call_timeout = remaining
+            if is_t3_wait:
+                params["timeoutMs"] = min(window_ms, max(1, int(remaining * 1000) - 1000))
+                call_timeout = min(remaining, params["timeoutMs"] / 1000 + 5)
+            started = loop.time()
+            # 后台调用沿用此连接/授权，但不经过前台 30 秒预算或自动重放路径。
+            result = await session.call_tool(
+                self._original_name, arguments=params,
+                read_timeout_seconds=timedelta(seconds=call_timeout),
+            )
+            rendered = self._render_call_result(result.content, params)
+            raw = result.model_dump(mode="json", by_alias=True)
+            if result.isError or not is_t3_wait:
+                return rendered, raw, result.isError
+            state = result.structuredContent
+            if state is None:
+                return rendered + "\nT3 wait 缺少结构化状态，无法确认远端完成。", raw, True
+            pending = state["timedOut"] or state["status"] in {
+                "preparing", "queued", "starting", "running", "waiting",
+            }
+            if not pending:
+                final = state.get("resultRun") or state
+                return rendered, raw, final["status"] not in {"completed", "idle"}
+            if params.get("runId") is None:
+                params["runId"] = state["runId"]
+                if params["runId"] is None:
+                    return rendered + "\nT3 wait 缺少 runId，不能继续等待其他运行。", raw, True
+            # next 是前台调用者的回合提示，不是远端终态；只继续此只读等待。
+            await asyncio.sleep(max(0, max(1, params["timeoutMs"] / 1000) - (loop.time() - started)))
 
     def _render_call_result(self, content: Any, arguments: Mapping[str, Any]) -> str:
         """Turn MCP content blocks into a tool result string.
