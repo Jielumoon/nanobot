@@ -191,6 +191,10 @@ class TurnDeliveryFactory:
             msg.chat_id.split(":", 1) if ":" in msg.chat_id else ("cli", msg.chat_id)
         )
         metadata = system_reply_metadata(channel, session_key)
+        if msg.sender_id == "background_exec":
+            route = msg.metadata.get("background_exec_route")
+            if isinstance(route, dict):
+                metadata.update(notification_metadata(channel, route))
         if origin_message_id := msg.metadata.get("origin_message_id"):
             metadata["origin_message_id"] = origin_message_id
         return TurnRoute(channel=channel, chat_id=chat_id, metadata=metadata)

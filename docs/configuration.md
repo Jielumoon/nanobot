@@ -2376,7 +2376,27 @@ For existing configurations, `timeout` remains a hard-runtime alias: `"timeout":
 
 The tool result distinguishes a hard-runtime termination from inactivity. With `idleAction: "report"`, a silent command continues running under its hard-runtime limit. With `idleAction: "terminate"`, inactivity stops the command and the result reports that reason. Both limits apply without polling. Commands are cleaned up when they finish, reach an enforced limit, or their owning session is cancelled or deleted; normal operation does not require manual process management. `yield_time_ms` and an `exec_session` wait timeout only control how long a tool call waits before returning; neither stops the command nor resets its runtime or inactivity clock.
 
-Silence is not proof that a command is stuck: builds, downloads, and buffered programs can be quiet while working. Only bytes received through stdout or stderr count as activity; output redirected to files is not observed, and reading logs does not refresh the inactivity clock. Inactivity checks do not detect prompts or supply answers. Choose `"terminate"` only when stopping a quiet command is acceptable, and use a finite hard runtime when total execution time must remain bounded. Shell sessions are not durable jobs and should not be used as a replacement for a scheduler or service manager. A command that detaches a background service and exits is not a managed job; these timing checks do not manage that service afterward.
+Silence is not proof that a command is stuck: builds, downloads, and buffered programs can be quiet while working. Only bytes received through stdout or stderr count as activity; output redirected to files is not observed, and reading logs does not refresh the inactivity clock. Inactivity checks do not detect prompts or supply answers. Choose `"terminate"` only when stopping a quiet command is acceptable, and use a finite hard runtime when total execution time must remain bounded. Ordinary shell sessions without `background: true` do not persist results or emit completion events. Neither mode replaces a scheduler or service manager. A command that detaches a background service and exits is not a managed job; these timing checks do not manage that service afterward.
+
+### 原生后台命令
+
+在运行中的 gateway 持久会话内，agent 可以显式调用 `exec` 的 `background` 参数：
+
+```json
+{"command": "python build.py", "background": true, "max_runtime": 600}
+```
+
+工具立即返回 JSON，包含稳定的 `task_id`、同值的 `session_id` 和 `status: "starting"`。前台回合结束不会取消命令；仍沿用 exec 的命令权限、工作目录、sandbox、时限、进程树清理与并发上限。后台模式关闭 stdin；交互式程序仍使用普通 exec。没有后台结果消费者的单次调用宿主、临时会话和 subagent 的独立执行器不提供此模式。
+
+用 `exec_session({"session_id": "bg_…"})` 立即查询状态、退出码和有界输出。默认返回最多 10000 字符，可用 `max_output_chars` 调至 50000；超限保留开头与结尾，`truncated_chars` 明示省略量。重复读取不消费日志。`exec_session({"session_id": "bg_…", "terminate": true})` 取消命令并清理进程树；后台 ID 不接受 stdin 或前台等待参数。其他会话或同名会话的新一代身份不能读取、取消旧任务。
+
+完成、失败、取消及中断先保存到会话目录的 `background-exec.sqlite3`，再通过现有 message bus 把结构化状态事件送回原会话。事件作为 FIFO 边界等待当前回合结束，由同一个会话 worker 接续，不另开模型循环。事件不携带命令输出；agent 通过 exec_session 读取不可信工具结果，决定后续动作和用户回复。没有周期性模型唤醒或日志扫描。
+
+`event_state: "consumed"` 只表示接续输入已保存到会话，不表示模型成功完成或用户已收到通知。保存输入后才确认事件；重启落在两者之间时通过已保存的任务 ID 补确认，不重复唤醒。agent 的用户回复沿用渠道 outbox，`delivery_run_id` 等于任务 ID；实际送达的 `pending/sent/failed/unknown` 独立记在现有 `delivery/outbox.sqlite3`。
+
+gateway 正常关闭会清理所管理的命令并记录中断。重新启动只恢复未消费完成事件，把遗留 `starting/running` 标为 `interrupted`，不自动重跑命令、不凭 PID 认领进程；硬崩溃后无法保证旧进程已停止。执行中输出有界保存在内存，查询或完成时保存快照，硬崩溃可能丢失最后一段输出。已消费事件的 agent 接续若被中断，沿用会话 checkpoint/用户显式继续，不自动重放副作用。结果目前不自动过期。
+
+此能力仅管理本地原生命令，不把已有 MCP 调用转为后台任务。MCP 工具仍受其 `toolTimeout`（默认 30 秒）、传输层和远端各自限制；HTTP 读超时已随配置延长，但这不会消除其他层的超时。要后台执行长等待 MCP，还需显式的调用入口来绑定原工具及参数、保留连接/授权生命周期，并把原结果交回此会话事件路径；当前没有这个接口。T3 的远端 thread/run ID 不等于本地后台 ID，也没有因此获得自动回调；本地超时或取消不能证明远端副作用终止。
 
 
 With a Unix sandbox enabled, the selected shell and any requested login profile run inside the sandbox, with its workspace-scoped `HOME`. Custom interpreters outside the exposed system paths require an explicit read-only bind. Tool PATH settings affect commands inside the sandbox, not selection of the host launcher. By default, install `bwrap` in the operating system's default executable search path (normally `/bin:/usr/bin`); a custom parent or tool `PATH` cannot override that launcher. Seatbelt defaults to `/usr/bin/sandbox-exec`. For a protected nonstandard installation, set `sandboxLauncher` instead of changing the host's global `/bin` or adding writable directories to the launcher search path. A missing, rejected, or failed launcher never falls back to unsandboxed execution.

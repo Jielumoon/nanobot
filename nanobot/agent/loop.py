@@ -29,6 +29,7 @@ from nanobot.agent.memory_context_state import MemoryContextRefresh
 from nanobot.agent.model_runtime import ModelRuntimeResolver
 from nanobot.agent.runner import AgentRunner, AgentRunResult, AgentRunSpec
 from nanobot.agent.subagent import SubagentManager
+from nanobot.agent.tools.background_exec import BACKGROUND_EXEC_ID, BackgroundExec
 from nanobot.agent.tools.context import RequestContext, bind_request_context, reset_request_context
 from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
@@ -395,7 +396,8 @@ class AgentLoop:
         # duplicating cleanup in each consumer.
         self.sessions.set_delete_observer(self._file_state_store.discard)
         self.tools = tool_registry if tool_registry is not None else ToolRegistry()
-        self._exec_session_manager = ExecSessionManager()
+        self._background_exec = BackgroundExec(self.sessions, bus)
+        self._exec_session_manager = ExecSessionManager(background_exec=self._background_exec)
         self.runner = AgentRunner()
         self.consolidator = Consolidator(
             store=self.context.memory,
@@ -1001,6 +1003,8 @@ class AgentLoop:
         return msg.session_key
 
     def _can_inject_message(self, msg: InboundMessage) -> bool:
+        if self._background_exec.owns(msg):
+            return False
         if turn_continuation.internal_continuation_inbound(msg.metadata) or any(
             coordinator.owns_turn(msg) for coordinator in self._automation_turn_coordinators
         ):
@@ -1442,6 +1446,7 @@ class AgentLoop:
         self._running = True
         try:
             logger.info("Agent loop started")
+            await self._background_exec.recover()
 
             while self._running:
                 try:
@@ -1692,8 +1697,10 @@ class AgentLoop:
                             return
                     await execution.enter_async_context(lock)
                     await execution.enter_async_context(gate)
+                    session = await self.sessions.state.read(session_key)
+                    if not await self._background_exec.admit(msg, session):
+                        return
                     processing = True
-                    await self.sessions.state.read(session_key)
                     delivery = self.turn_delivery_factory.create(
                         msg,
                         session_key,
@@ -2238,6 +2245,20 @@ class AgentLoop:
             session.get_history, extend_to_user=is_subagent,
         )
         stored_state = session.provider_state
+        if self._background_exec.owns(ctx.msg):
+            task_id = ctx.msg.metadata[BACKGROUND_EXEC_ID]
+            session.add_message(
+                "user", ctx.msg.content,
+                injected_event="background_exec_result",
+                **{BACKGROUND_EXEC_ID: task_id},
+            )
+            # 先保存可恢复输入，再确认事件；重启落在两者之间也不会再次唤醒。
+            self._mark_pending_user_turn(session)
+            session.provider_state = None
+            stored_state = None
+            await self.sessions.state.prepare_input(session)
+            await self._background_exec.acknowledge(task_id)
+            ctx.input_persisted_early = True
         subagent_followup_persisted = False
         if is_subagent:
             # Keep the durable internal delivery as an assistant record, but

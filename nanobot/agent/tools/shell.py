@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shlex
@@ -131,6 +132,14 @@ def _exec_parameters(config: ExecToolConfig) -> dict[str, Any]:
             description="Run bash/zsh as a login shell.",
             default=False,
             nullable=True,
+        ),
+        background=BooleanSchema(
+            description=(
+                "Start a durable background command and return its task/session ID immediately. "
+                "Completion resumes this conversation; inspect/cancel with exec_session. "
+                "Does not background MCP calls or survive a gateway restart as running."
+            ),
+            default=False,
         ),
         yield_time_ms=IntegerSchema(
             description="Return after this many milliseconds if still running (default 1000, max 30000); execution continues.",
@@ -296,6 +305,7 @@ class ExecTool(Tool):
         max_output_chars: int | None = None,
         max_output_tokens: int | None = None,
         max_runtime: int | None = None,
+        background: bool = False,
         **kwargs: Any,
     ) -> str:
         command = command or cmd
@@ -316,7 +326,9 @@ class ExecTool(Tool):
             return ToolResult.error(f"Error: {exc}")
         if isinstance(prepared, str):
             return prepared
-        return await self._execute_session(prepared, yield_time_ms, max_output_chars)
+        return await self._execute_session(
+            prepared, yield_time_ms, max_output_chars, background=background,
+        )
 
     async def execute_to_completion(self, command: str, working_dir: str) -> str:
         """Return the complete result for a trusted user shell command, without an agent observer."""
@@ -335,6 +347,7 @@ class ExecTool(Tool):
         max_output_chars: int | None,
         *,
         until_exit: bool = False,
+        background: bool = False,
     ) -> str:
         try:
             session_id, poll = await self._session_manager.start(
@@ -348,7 +361,8 @@ class ExecTool(Tool):
                     yield_time_ms, DEFAULT_YIELD_MS, 0, MAX_YIELD_MS,
                 ),
                 until_exit=until_exit,
-                stdin=(asyncio.subprocess.DEVNULL if yield_time_ms is None else asyncio.subprocess.PIPE),
+                background=background,
+                stdin=(asyncio.subprocess.DEVNULL if background or yield_time_ms is None else asyncio.subprocess.PIPE),
                 idle_timeout=self._exec_config.idle_timeout,
                 idle_action=self._exec_config.idle_action,
                 owner_session_key=current_request_session_key(),
@@ -359,6 +373,11 @@ class ExecTool(Tool):
                     MAX_OUTPUT_CHARS,
                 ),
             )
+            if background:
+                return json.dumps({
+                    "task_id": session_id, "session_id": session_id, "status": "starting",
+                    "message": "后台命令已接纳；完成事件将交回原会话。用 exec_session 查询或取消。",
+                }, ensure_ascii=False)
             result = format_session_poll(session_id, poll)
             if not poll.done:
                 result += "\nInitial wait ended; session remains active."

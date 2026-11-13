@@ -8,13 +8,14 @@ import uuid
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
 from nanobot.agent.tools.base import Tool, ToolResult, tool_parameters
 from nanobot.agent.tools.context import (
     ToolContext,
+    current_request_context,
     current_request_session_key,
     tool_log_content_allowed,
 )
@@ -26,6 +27,9 @@ from nanobot.agent.tools.schema import (
 )
 from nanobot.agent.tools.shell_config import ExecToolConfig
 from nanobot.agent.tools.shell_output import ShellOutputFilter
+
+if TYPE_CHECKING:
+    from nanobot.agent.tools.background_exec import BackgroundExec, BackgroundExecRecord
 
 DEFAULT_YIELD_MS = 1000
 MAX_YIELD_MS = 30_000
@@ -135,9 +139,12 @@ class _BoundedOutputBuffer:
                 self._tail[0] = first[excess:]
                 self._tail_chars -= excess
 
-    def drain(self) -> tuple[str, int]:
+    def snapshot(self) -> tuple[str, int]:
         output = self._content + "".join(self._tail)
-        truncated_chars = self._total_chars - len(output)
+        return output, self._total_chars - len(output)
+
+    def drain(self) -> tuple[str, int]:
+        output, truncated_chars = self.snapshot()
         self._content = ""
         self._tail.clear()
         self._tail_chars = 0
@@ -342,6 +349,7 @@ class _ExecSession:
         max_output_chars: int,
         *,
         stdin_closed: bool = False,
+        consume: bool = True,
     ) -> _SessionPoll:
         if yield_time_ms > 0 and not self._completion_task.done():
             await asyncio.wait(
@@ -353,8 +361,8 @@ class _ExecSession:
             raise RuntimeError(f"session {self.session_id} cleanup failed: {self.cleanup_error}")
 
         async with self._lock:
-            stdout, stdout_truncated = self._stdout.drain()
-            stderr, stderr_truncated = self._stderr.drain()
+            stdout, stdout_truncated = self._stdout.drain() if consume else self._stdout.snapshot()
+            stderr, stderr_truncated = self._stderr.drain() if consume else self._stderr.snapshot()
 
         output_parts = [stdout] if stdout else []
         if stderr:
@@ -420,7 +428,10 @@ class _ExecSession:
 
 
 class ExecSessionManager:
-    def __init__(self, *, max_sessions: int = 8, result_retention: int = 1800) -> None:
+    def __init__(
+        self, *, max_sessions: int = 8, result_retention: int = 1800,
+        background_exec: BackgroundExec | None = None,
+    ) -> None:
         self.max_sessions = max_sessions
         self.result_retention = result_retention
         self._sessions: dict[str, _ExecSession] = {}
@@ -428,12 +439,15 @@ class ExecSessionManager:
         self._stopping_launches: set[asyncio.Task[_ExecSession]] = set()
         self._lock = asyncio.Lock()
         self._closed = False
+        self.background_exec = background_exec
+        self._background_tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
     def has_pending_work(self) -> bool:
         """Inspect owned work without polling, terminating or removing sessions."""
         return bool(
             self._lock.locked() or self._starting or self._stopping_launches
+            or self._background_tasks
             or any(s.has_pending_work for s in self._sessions.values())
         )
 
@@ -453,6 +467,7 @@ class ExecSessionManager:
         idle_action: Literal["report", "terminate"] = "report",
         stdin: int = asyncio.subprocess.PIPE,
         until_exit: bool = False,
+        background: bool = False,
     ) -> tuple[str, _SessionPoll]:
         async with self._lock:
             if self._closed:
@@ -467,7 +482,14 @@ class ExecSessionManager:
                 if not finished:
                     raise RuntimeError(f"maximum exec sessions reached ({self.max_sessions})")
                 self._sessions.pop(min(finished)[1])
-            session_id = uuid.uuid4().hex[:12]
+            session_id = "bg_" + uuid.uuid4().hex if background else uuid.uuid4().hex[:12]
+            if background:
+                ctx = current_request_context()
+                if self.background_exec is None or ctx is None:
+                    raise ValueError("当前宿主不支持后台命令结果回传")
+                await self.background_exec.create(
+                    session_id, ctx, shlex.join(command) if isinstance(command, list) else command, cwd,
+                )
             launch = asyncio.create_task(self._launch(
                 session_id=session_id, command=command, cwd=cwd, env=env,
                 timeout=timeout, shell_program=shell_program, login=login,
@@ -475,6 +497,11 @@ class ExecSessionManager:
                 idle_action=idle_action, stdin=stdin,
             ))
             self._starting[session_id] = (owner_session_key, launch)
+            if background:
+                supervisor = asyncio.create_task(self._complete_background(session_id, launch))
+                self._background_tasks[session_id] = supervisor
+                supervisor.add_done_callback(lambda task: self._background_done(session_id, task))
+                return session_id, _SessionPoll(output="", done=False, exit_code=None)
         try:
             session = await launch
             if until_exit:
@@ -493,6 +520,64 @@ class ExecSessionManager:
             async with self._lock:
                 self._sessions.pop(session_id, None)
         return session_id, poll
+
+    def _background_done(self, session_id: str, task: asyncio.Task[None]) -> None:
+        self._background_tasks.pop(session_id, None)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.opt(exception=error if tool_log_content_allowed() else False).error(
+                "Background exec supervision failed for {}", session_id,
+            )
+
+    async def _complete_background(
+        self, session_id: str, launch: asyncio.Task[_ExecSession],
+    ) -> None:
+        assert self.background_exec is not None
+        session: _ExecSession | None = None
+        try:
+            session = await launch
+            await session.wait_exit()
+            poll = await session.poll(0, MAX_OUTPUT_CHARS, consume=False)
+        except asyncio.CancelledError:
+            # 只有启动任务会被所有者/显式取消；已返回 ID 的监督任务不依附前台回合。
+            poll = _SessionPoll(
+                output="", done=True, exit_code=None,
+                finish_reason="shutdown" if self._closed else "cancelled",
+            )
+        except Exception as exc:
+            if session is not None and session.has_pending_work:
+                await session.kill("execution_error")
+            poll = _SessionPoll(
+                output="", done=True, exit_code=None,
+                finish_reason="shutdown" if self._closed else "execution_error",
+                output_incomplete=True, execution_error=str(exc),
+            )
+        await self.background_exec.update(session_id, poll, terminal=True)
+        async with self._lock:
+            self._sessions.pop(session_id, None)
+
+    async def read_background(
+        self, session_id: str, *, terminate: bool = False,
+    ) -> BackgroundExecRecord:
+        ctx = current_request_context()
+        if self.background_exec is None or ctx is None:
+            raise KeyError(session_id)
+        record = await self.background_exec.get(session_id, ctx)
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            starting = self._starting.get(session_id)
+            supervisor = self._background_tasks.get(session_id)
+        if terminate:
+            if session is not None:
+                await session.kill()
+            elif starting is not None:
+                starting[1].cancel()
+            if supervisor is not None:
+                await asyncio.shield(supervisor)
+            return await self.background_exec.get(session_id, ctx)
+        if session is not None:
+            poll = await session.poll(0, MAX_OUTPUT_CHARS, consume=False)
+            return await self.background_exec.update(session_id, poll, terminal=poll.done)
+        return record
 
     async def _launch(
         self, *, session_id: str, command: str | list[str], cwd: str,
@@ -600,7 +685,10 @@ class ExecSessionManager:
             sessions: list[_ExecSession] = list(self._sessions.values())
             launches = [task for _, task in self._starting.values()]
             self._starting.clear()
-        return await self._stop_owned(sessions, launches, "shutdown")
+        count = await self._stop_owned(sessions, launches, "shutdown")
+        if self._background_tasks:
+            await asyncio.gather(*tuple(self._background_tasks.values()))
+        return count
 
     async def terminate_by_owner(self, owner_session_key: str) -> int:
         """Terminate all sessions owned by owner_session_key. Returns count."""
@@ -768,6 +856,12 @@ def format_session_poll(session_id: str, poll: _SessionPoll) -> str:
             maximum=MAX_WAIT_FOR_MS,
             nullable=True,
         ),
+        max_output_chars=IntegerSchema(
+            description="Bound the returned log (default 10000, max 50000); background logs are non-destructive snapshots.",
+            minimum=1000,
+            maximum=MAX_OUTPUT_CHARS,
+            nullable=True,
+        ),
         required=["session_id"],
     )
 )
@@ -806,7 +900,7 @@ class ExecSessionTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Manage a session returned by exec."
+        return "Manage a session returned by exec. Background IDs return bounded status/log snapshots; terminate cancels the process tree."
 
     async def execute(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
@@ -817,9 +911,17 @@ class ExecSessionTool(Tool):
         wait_for: str | None = None,
         until_exit: bool = False,
         timeout_ms: int | None = None,
+        max_output_chars: int | None = None,
         **kwargs: Any,
     ) -> str:
         try:
+            output_limit = clamp_session_int(max_output_chars, DEFAULT_MAX_OUTPUT_CHARS, 1000, MAX_OUTPUT_CHARS)
+            if session_id.startswith("bg_"):
+                if input is not None or close_stdin or wait_for is not None or until_exit or timeout_ms is not None:
+                    return ToolResult.error("后台命令只支持立即查询或 terminate；不支持 stdin 或前台等待。")
+                record = await self._manager.read_background(session_id, terminate=terminate)
+                result = record.public_result(output_limit)
+                return ToolResult.error(result) if record.status in {"failed", "cancelled", "interrupted"} else result
             if wait_for == "":
                 return ToolResult.error("Error: wait_for must not be empty.")
             if wait_for is not None and until_exit:
@@ -843,7 +945,7 @@ class ExecSessionTool(Tool):
                     close_stdin=False,
                     terminate=True,
                     yield_time_ms=0,
-                    max_output_chars=DEFAULT_MAX_OUTPUT_CHARS,
+                    max_output_chars=output_limit,
                     owner_session_key=current_request_session_key(),
                 )
                 result = format_session_poll(session_id, poll)
@@ -868,6 +970,7 @@ class ExecSessionTool(Tool):
                     0,
                     MAX_WAIT_FOR_MS,
                 ),
+                max_output_chars=output_limit,
             )
         except KeyError:
             return ToolResult.error(f"Error: exec session not found: {session_id!r}")
@@ -883,9 +986,10 @@ class ExecSessionTool(Tool):
         wait_for: str | None,
         until_exit: bool,
         timeout_ms: int,
+        max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
     ) -> str:
         deadline = time.monotonic() + (timeout_ms / 1000)
-        aggregate = _BoundedOutputBuffer(DEFAULT_MAX_OUTPUT_CHARS)
+        aggregate = _BoundedOutputBuffer(max_output_chars)
         upstream_truncated = 0
         search_overlap = ""
         first = True
