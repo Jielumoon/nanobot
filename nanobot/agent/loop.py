@@ -33,8 +33,8 @@ from nanobot.agent.tools.background_exec import BACKGROUND_EXEC_ID, BackgroundEx
 from nanobot.agent.tools.context import RequestContext, bind_request_context, reset_request_context
 from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
-from nanobot.agent.tools.message import capture_message_deliveries
 from nanobot.agent.tools.mcp_discovery import MCP_LOADED_TOOLS_KEY, MCPToolRegistry
+from nanobot.agent.tools.message import capture_message_deliveries
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.runtime_control import AgentRuntimeControl
 from nanobot.agent.turn_delivery import (

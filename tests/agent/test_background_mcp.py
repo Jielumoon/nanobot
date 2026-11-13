@@ -23,7 +23,7 @@ from nanobot.session.manager import SessionManager
 
 
 @pytest.mark.asyncio
-async def test_t3_background_wait_resumes_original_session(tmp_path):
+async def test_discovered_t3_background_wait_resumes_original_session(tmp_path):
     server = FastMCP("本地 T3 等待检查")
     remote_started = asyncio.Event()
     remote_finished = asyncio.Event()
@@ -56,15 +56,32 @@ async def test_t3_background_wait_resumes_original_session(tmp_path):
         async def chat(**kwargs):
             nonlocal calls, task_id
             calls += 1
-            if calls == 1:
+            schemas = {schema["function"]["name"]: schema for schema in kwargs["tools"]}
+            if calls <= 2:
+                assert tool.name not in schemas
+                assert "mcp_search" in schemas
+            else:
+                assert schemas[tool.name] == tool.to_schema()
+                assert "_nanobot_background" in schemas[tool.name]["function"]["parameters"]["properties"]
+            if calls in (1, 3):
+                if calls == 3:
+                    found = json.loads(kwargs["messages"][-1]["content"])
+                    assert [item["name"] for item in found["loaded"]] == [tool.name]
                 return LLMResponse(content=None, tool_calls=[ToolCallRequest(
-                    id="wait", name=tool.name, arguments={"threadId": "thread-a", "timeoutMs": 1000,
+                    id=f"wait-{calls}", name=tool.name, arguments={"threadId": "thread-a", "timeoutMs": 1000,
                     "_nanobot_background": {"timeout_s": 10}},
                 )])
             if calls == 2:
+                assert "not found" in kwargs["messages"][-1]["content"]
+                assert waits == []
+                return LLMResponse(content=None, tool_calls=[ToolCallRequest(
+                    id="discover", name="mcp_search",
+                    arguments={"query": tool.name, "limit": 1},
+                )])
+            if calls == 4:
                 task_id = json.loads(kwargs["messages"][-1]["content"])["task_id"]
                 return LLMResponse(content="已交给后台等待")
-            if calls == 3:
+            if calls == 5:
                 assert task_id in kwargs["messages"][-1]["content"]
                 return LLMResponse(content=None, tool_calls=[ToolCallRequest(
                     id="read", name="exec_session", arguments={"session_id": task_id},
@@ -99,7 +116,7 @@ async def test_t3_background_wait_resumes_original_session(tmp_path):
             assert (final.channel, final.chat_id) == ("weixin.bot", "origin")
             assert final.content == "已读取远端交付并接续"
             assert waits == [("thread-a", None), ("thread-a", "run-a")]
-            assert calls == 4
+            assert calls == 6
         finally:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
