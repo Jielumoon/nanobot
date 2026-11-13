@@ -151,7 +151,7 @@ async def test_compact_dream_correction_keeps_daily_mirror_historical(builder):
     runtime = LLMRuntime.capture(provider, "test", context_window_tokens=8000)
     consolidator = Consolidator(
         store=store, sessions=MagicMock(), build_messages=builder.build_messages,
-        get_tool_definitions=lambda: [],
+        get_tool_definitions=lambda session: [],
     )
     transcript = [{"role": "user", "content": "我早餐选拿铁"}]
     await consolidator.archiver.archive(

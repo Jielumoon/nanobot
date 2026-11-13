@@ -34,6 +34,7 @@ from nanobot.agent.tools.context import RequestContext, bind_request_context, re
 from nanobot.agent.tools.exec_session import ExecSessionManager
 from nanobot.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from nanobot.agent.tools.message import capture_message_deliveries
+from nanobot.agent.tools.mcp_discovery import MCP_LOADED_TOOLS_KEY, MCPToolRegistry
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.runtime_control import AgentRuntimeControl
 from nanobot.agent.turn_delivery import (
@@ -388,6 +389,7 @@ class AgentLoop:
             network=self.network_config,
         )
         self.sessions = session_manager or SessionManager(workspace)
+        self.sessions.exclude_generation_metadata(frozenset({MCP_LOADED_TOOLS_KEY}))
         # One file-read/write tracker per logical session. The tool registry is
         # shared by this loop, so tools resolve the active state via contextvars.
         self._file_state_store = FileStateStore(max_sessions=SESSION_CACHE_MAX_SIZE)
@@ -403,7 +405,9 @@ class AgentLoop:
             store=self.context.memory,
             sessions=self.sessions,
             build_messages=self.context.build_messages,
-            get_tool_definitions=self.tools.get_definitions,
+            get_tool_definitions=lambda session: MCPToolRegistry(
+                self.tools, self.sessions, session=session,
+            ).get_definitions(),
             resolve_prompt_context=PersistedPromptContextResolver(
                 workspace_scopes=self.workspace_scopes,
                 unified_session=unified_session,
@@ -1302,6 +1306,10 @@ class AgentLoop:
             ),
         )
         effective_tools = tools if tools is not None else self.tools
+        if not isinstance(effective_tools, MCPToolRegistry):
+            effective_tools = MCPToolRegistry(
+                effective_tools, self.sessions, session=session, persist=request_ctx.persist_session,
+            )
         memory_generation = (
             transcript_input.memory_view.generation if transcript_input.memory_view is not None
             else self.context.memory.generation()
@@ -1344,6 +1352,15 @@ class AgentLoop:
                 run_extra_hooks_for_ephemeral=run_extra_hooks_for_ephemeral,
                 log_content=request_ctx.log_content,
             ))
+
+            async def consolidate(
+                method: Callable[..., Awaitable[str | None]], *args: Any, **kwargs: Any,
+            ) -> str | None:
+                return await method(
+                    *args, **kwargs, runtime=runtime, session_key=consolidation_session_key,
+                    tools=effective_tools.get_definitions(), persist=session is not None and not ephemeral,
+                )
+
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=None,
                 tools=effective_tools,
@@ -1360,20 +1377,8 @@ class AgentLoop:
                 session_key=session.key if session else None,
                 provider_retry_mode=self.provider_retry_mode,
                 checkpoint_callback=_checkpoint,
-                consolidate_history=partial(
-                    self.consolidator.summarize_transcript,
-                    runtime=runtime,
-                    session_key=consolidation_session_key,
-                    tools=effective_tools.get_definitions(),
-                    persist=session is not None and not ephemeral,
-                ),
-                consolidate_provider_compaction=partial(
-                    self.consolidator.summarize_provider_compaction,
-                    runtime=runtime,
-                    session_key=consolidation_session_key,
-                    tools=effective_tools.get_definitions(),
-                    persist=session is not None and not ephemeral,
-                ),
+                consolidate_history=partial(consolidate, self.consolidator.summarize_transcript),
+                consolidate_provider_compaction=partial(consolidate, self.consolidator.summarize_provider_compaction),
                 injection_callback=_drain_pending,
                 terminal_injection_callback=_wait_for_pending,
                 continuation_callback=(
@@ -2122,14 +2127,9 @@ class AgentLoop:
         await ctx.delivery.bind_session_generation(session.generation)
         ctx.ephemeral = ctx.ephemeral or not session.policy.persist
         tools = ctx.tools if ctx.tools is not None else self.tools
-        if session.policy.disabled_tools:
-            restricted = ToolRegistry()
-            for name in tools.tool_names:
-                tool = tools.get(name)
-                if name not in session.policy.disabled_tools and tool:
-                    restricted.register(tool)
-            tools = restricted
-        ctx.tools = tools
+        ctx.tools = MCPToolRegistry(
+            tools, self.sessions, session=session, persist=not ctx.ephemeral,
+        )
 
         if ctx.kind is TurnKind.SYSTEM:
             logger.info("Processing system message from {}", msg.sender_id)

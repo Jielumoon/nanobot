@@ -1087,7 +1087,7 @@ class MemoryArchiver:
         self,
         store: MemoryStore,
         build_messages: Callable[..., list[dict[str, Any]]],
-        get_tool_definitions: Callable[[], list[dict[str, Any]]],
+        get_tool_definitions: Callable[[Session], list[dict[str, Any]]],
         resolve_prompt_context: Callable[[Session], tuple[str | None, Path | None]] | None = None,
     ) -> None:
         self.store = store
@@ -1395,7 +1395,7 @@ class MemoryArchiver:
             session_summary=session_summary,
             workspace=workspace,
         )
-        tools = self._get_tool_definitions()
+        tools = self._get_tool_definitions(session)
         return await self.archive(
             messages,
             runtime=runtime,
@@ -1417,7 +1417,7 @@ class Consolidator:
         store: MemoryStore,
         sessions: SessionManager,
         build_messages: Callable[..., list[dict[str, Any]]],
-        get_tool_definitions: Callable[[], list[dict[str, Any]]],
+        get_tool_definitions: Callable[[Session], list[dict[str, Any]]],
         resolve_prompt_context: Callable[[Session], tuple[str | None, Path | None]] | None = None,
     ):
         self.store = store
@@ -1535,7 +1535,7 @@ class Consolidator:
             runtime.provider,
             runtime.model,
             probe_messages,
-            self._get_tool_definitions(),
+            self._get_tool_definitions(session),
         )
 
     def _input_token_budget(self, runtime: LLMRuntime) -> int:

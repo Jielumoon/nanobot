@@ -183,7 +183,7 @@ async def test_archive_preserves_raw_history_after_truncated_stream_retries(
     provider.set_llm_call_observer(calls.append)
     store = MemoryStore(tmp_path)
     archiver = MemoryArchiver(
-        store=store, build_messages=lambda **kwargs: [], get_tool_definitions=lambda: [],
+        store=store, build_messages=lambda **kwargs: [], get_tool_definitions=lambda session: [],
     )
     messages = [{"role": "user", "content": "Mandatory constraint: PRESERVE_AUDIT_LOGS."}]
 
