@@ -16,7 +16,7 @@ from nanobot.session.manager import Session
 from nanobot.session.state import SessionState
 
 
-def _make_loop():
+def _make_loop(tmp_path):
     """Create a minimal AgentLoop with mocked dependencies."""
     from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
@@ -24,12 +24,13 @@ def _make_loop():
     bus = MessageBus()
     provider = MagicMock(aclose=AsyncMock())
     provider.get_default_model.return_value = "test-model"
-    workspace = MagicMock()
-    workspace.__truediv__ = MagicMock(return_value=MagicMock())
+    workspace = tmp_path
+
 
     with patch("nanobot.agent.loop.ContextBuilder"), \
          patch("nanobot.agent.loop.SessionManager") as mock_sessions, \
          patch("nanobot.agent.loop.SubagentManager") as mock_sub_mgr:
+        mock_sessions.return_value.sessions_dir = tmp_path / "sessions"
         mock_sessions.return_value.state = MagicMock(spec=SessionState)
         mock_sessions.return_value.state.get = AsyncMock(side_effect=lambda key: Session(key))
         mock_sessions.return_value.state.peek.return_value = None
@@ -41,7 +42,7 @@ def _make_loop():
 class TestRestartCommand:
 
     @pytest.mark.asyncio
-    async def test_restart_sends_message_and_calls_execv(self):
+    async def test_restart_sends_message_and_calls_execv(self, tmp_path):
         from nanobot.command.builtin import cmd_restart
         from nanobot.command.router import CommandContext
         from nanobot.utils.restart import (
@@ -50,7 +51,7 @@ class TestRestartCommand:
             RESTART_STARTED_AT_ENV,
         )
 
-        loop, _bus = _make_loop()
+        loop, _bus = _make_loop(tmp_path)
         loop.restart_mode = "exec"
         msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
         ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
@@ -84,11 +85,11 @@ class TestRestartCommand:
             mock_execv.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_restart_windows_auto_spawns_and_exits(self):
+    async def test_restart_windows_auto_spawns_and_exits(self, tmp_path):
         from nanobot.command.builtin import cmd_restart
         from nanobot.command.router import CommandContext
 
-        loop, _bus = _make_loop()
+        loop, _bus = _make_loop(tmp_path)
         msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
         ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
 
@@ -118,11 +119,11 @@ class TestRestartCommand:
         mock_execv.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_restart_exit_mode_does_not_spawn(self):
+    async def test_restart_exit_mode_does_not_spawn(self, tmp_path):
         from nanobot.command.builtin import cmd_restart
         from nanobot.command.router import CommandContext
 
-        loop, _bus = _make_loop()
+        loop, _bus = _make_loop(tmp_path)
         loop.restart_mode = "exit"
         msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/restart")
         ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/restart", loop=loop)
@@ -148,8 +149,8 @@ class TestRestartCommand:
         mock_execv.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_restart_intercepted_in_run_loop(self):
-        loop, bus = _make_loop()
+    async def test_restart_intercepted_in_run_loop(self, tmp_path):
+        loop, bus = _make_loop(tmp_path)
         loop.restart_mode = "exec"
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/restart")
 
@@ -189,8 +190,8 @@ class TestRestartCommand:
             await scheduled[0]
 
     @pytest.mark.asyncio
-    async def test_status_intercepted_in_run_loop(self):
-        loop, bus = _make_loop()
+    async def test_status_intercepted_in_run_loop(self, tmp_path):
+        loop, bus = _make_loop(tmp_path)
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/status")
 
         with patch.object(loop, "_enqueue_session_message", new_callable=MagicMock) as mock_dispatch:
@@ -210,8 +211,8 @@ class TestRestartCommand:
             assert "nanobot" in out.content.lower() or "模型" in out.content
 
     @pytest.mark.asyncio
-    async def test_run_propagates_external_cancellation(self):
-        loop, _bus = _make_loop()
+    async def test_run_propagates_external_cancellation(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
 
         run_task = asyncio.create_task(loop.run())
         await asyncio.sleep(0)
@@ -221,8 +222,8 @@ class TestRestartCommand:
             await asyncio.wait_for(run_task, timeout=1.0)
 
     @pytest.mark.asyncio
-    async def test_help_includes_restart(self):
-        loop, bus = _make_loop()
+    async def test_help_includes_restart(self, tmp_path):
+        loop, bus = _make_loop(tmp_path)
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/help")
 
         response = await loop._process_message(msg)
@@ -233,8 +234,8 @@ class TestRestartCommand:
         assert response.metadata == {"render_as": "text"}
 
     @pytest.mark.asyncio
-    async def test_status_reports_runtime_info(self):
-        loop, _bus = _make_loop()
+    async def test_status_reports_runtime_info(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = [{"role": "user"}] * 3
         session.metadata = {
@@ -273,8 +274,8 @@ class TestRestartCommand:
         )
 
     @pytest.mark.asyncio
-    async def test_status_counts_running_dispatch_and_subagent_tasks(self):
-        loop, _bus = _make_loop()
+    async def test_status_counts_running_dispatch_and_subagent_tasks(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = [{"role": "user"}]
         loop.sessions.state.get = AsyncMock(return_value=session)
@@ -297,8 +298,8 @@ class TestRestartCommand:
         assert "正在运行的任务：3 个" in response.content
 
     @pytest.mark.asyncio
-    async def test_run_agent_loop_estimates_usage_when_provider_omits_it(self, monkeypatch):
-        loop, _bus = _make_loop()
+    async def test_run_agent_loop_estimates_usage_when_provider_omits_it(self, monkeypatch, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         monkeypatch.setattr(
             "nanobot.agent.runner.estimate_prompt_tokens_chain",
             lambda *_args, **_kwargs: (123, "test"),
@@ -325,8 +326,8 @@ class TestRestartCommand:
         assert second.usage == LLMUsage.estimated(input_tokens=123, output_tokens=7)
 
     @pytest.mark.asyncio
-    async def test_status_falls_back_to_session_usage_when_context_estimate_missing(self):
-        loop, _bus = _make_loop()
+    async def test_status_falls_back_to_session_usage_when_context_estimate_missing(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = [{"role": "user"}]
         session.metadata = {
@@ -348,8 +349,8 @@ class TestRestartCommand:
         assert "正在运行的任务：0 个" in response.content
 
     @pytest.mark.asyncio
-    async def test_history_shows_recent_messages(self):
-        loop, _bus = _make_loop()
+    async def test_history_shows_recent_messages(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = [
             {"role": "user", "content": "Hello"},
@@ -370,8 +371,8 @@ class TestRestartCommand:
         assert response.metadata == {"render_as": "text"}
 
     @pytest.mark.asyncio
-    async def test_history_respects_count_argument(self):
-        loop, _bus = _make_loop()
+    async def test_history_respects_count_argument(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = [
             {"role": "user", "content": f"message {i}"} for i in range(20)
@@ -387,8 +388,8 @@ class TestRestartCommand:
         assert "message 0" not in response.content
 
     @pytest.mark.asyncio
-    async def test_history_clamps_count_and_extracts_text_blocks(self):
-        loop, _bus = _make_loop()
+    async def test_history_clamps_count_and_extracts_text_blocks(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = [
             {
@@ -412,8 +413,8 @@ class TestRestartCommand:
         assert "reply 9" not in response.content
 
     @pytest.mark.asyncio
-    async def test_history_invalid_count_returns_usage(self):
-        loop, _bus = _make_loop()
+    async def test_history_invalid_count_returns_usage(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
 
         msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="c1", content="/history nope")
         response = await loop._process_message(msg)
@@ -422,8 +423,8 @@ class TestRestartCommand:
         assert response.content.startswith("用法：/history [count]")
 
     @pytest.mark.asyncio
-    async def test_history_empty_session(self):
-        loop, _bus = _make_loop()
+    async def test_history_empty_session(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = []
         loop.sessions.state.get = AsyncMock(return_value=session)
@@ -435,8 +436,8 @@ class TestRestartCommand:
         assert "暂无对话历史。" in response.content
 
     @pytest.mark.asyncio
-    async def test_process_direct_preserves_render_metadata(self):
-        loop, _bus = _make_loop()
+    async def test_process_direct_preserves_render_metadata(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         session = MagicMock()
         session.get_history.return_value = []
         loop.sessions.state.get = AsyncMock(return_value=session)

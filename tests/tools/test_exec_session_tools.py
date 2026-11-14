@@ -20,10 +20,10 @@ from nanobot.agent.tools.exec_session import (
     ExecSessionManager,
     ExecSessionTool,
     ListExecSessionsTool,
+    SessionPoll,
     _BoundedOutputBuffer,
     _ExecSession,
-    _SessionPoll,
-    _truncate_output,
+    truncate_output,
 )
 from nanobot.agent.tools.registry import is_tool_error_result
 from nanobot.agent.tools.shell import ExecTool
@@ -337,9 +337,9 @@ def test_exec_session_wait_for_keeps_aggregate_within_output_budget():
     async def run() -> str:
         manager = SimpleNamespace(
             write=AsyncMock(side_effect=[
-                _SessionPoll(output="HEAD" + "a" * 5996, done=False, exit_code=None),
-                _SessionPoll(output="b" * 6000, done=False, exit_code=None),
-                _SessionPoll(output="c" * 5994 + "TARGET", done=False, exit_code=None),
+                SessionPoll(output="HEAD" + "a" * 5996, done=False, exit_code=None),
+                SessionPoll(output="b" * 6000, done=False, exit_code=None),
+                SessionPoll(output="c" * 5994 + "TARGET", done=False, exit_code=None),
             ])
         )
         tool = ExecSessionTool(manager=manager)
@@ -374,11 +374,11 @@ def test_exec_session_wait_for_searches_before_response_truncation():
             yield_time_ms: int,
             max_output_chars: int,
             owner_session_key: str | None,
-        ) -> _SessionPoll:
+        ) -> SessionPoll:
             del session_id, chars, close_stdin, terminate, yield_time_ms, owner_session_key
             observed_limits.append(max_output_chars)
-            visible, truncated = _truncate_output(output, max_output_chars)
-            return _SessionPoll(
+            visible, truncated = truncate_output(output, max_output_chars)
+            return SessionPoll(
                 output=visible,
                 done=True,
                 exit_code=0,

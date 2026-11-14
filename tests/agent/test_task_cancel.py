@@ -23,7 +23,7 @@ def _runtime(provider: MagicMock | None = None) -> LLMRuntime:
     return LLMRuntime.capture(provider, "test-model", context_window_tokens=128_000)
 
 
-def _make_loop(*, tools_config=None):
+def _make_loop(tmp_path, *, tools_config=None):
     """Create a minimal AgentLoop with mocked dependencies."""
     from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
@@ -31,8 +31,8 @@ def _make_loop(*, tools_config=None):
     bus = MessageBus()
     provider = MagicMock(aclose=AsyncMock())
     provider.get_default_model.return_value = "test-model"
-    workspace = MagicMock()
-    workspace.__truediv__ = MagicMock(return_value=MagicMock())
+    workspace = tmp_path
+
 
     with patch("nanobot.agent.loop.ContextBuilder"), \
          patch("nanobot.agent.loop.SessionManager", side_effect=mock_session_manager), \
@@ -44,8 +44,8 @@ def _make_loop(*, tools_config=None):
 
 class TestActiveTaskTracking:
     @pytest.mark.asyncio
-    async def test_completed_task_removes_empty_session_group(self):
-        loop, _bus = _make_loop()
+    async def test_completed_task_removes_empty_session_group(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         release = asyncio.Event()
         task = asyncio.create_task(release.wait())
 
@@ -57,8 +57,8 @@ class TestActiveTaskTracking:
         assert "test:c1" not in loop._active_tasks
 
     @pytest.mark.asyncio
-    async def test_session_group_remains_until_last_task_completes(self):
-        loop, _bus = _make_loop()
+    async def test_session_group_remains_until_last_task_completes(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         releases = [asyncio.Event(), asyncio.Event()]
         tasks = [asyncio.create_task(release.wait()) for release in releases]
         for task in tasks:
@@ -77,8 +77,8 @@ class TestActiveTaskTracking:
         assert "test:c1" not in loop._active_tasks
 
     @pytest.mark.asyncio
-    async def test_old_callback_preserves_replacement_session_group(self):
-        loop, _bus = _make_loop()
+    async def test_old_callback_preserves_replacement_session_group(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         old_release = asyncio.Event()
         new_release = asyncio.Event()
         old_task = asyncio.create_task(old_release.wait())
@@ -111,8 +111,8 @@ async def _wait_for_background_callbacks(loop) -> None:
 
 class TestBackgroundTaskTracking:
     @pytest.mark.asyncio
-    async def test_successful_background_task_is_removed(self, monkeypatch):
-        loop, _bus = _make_loop()
+    async def test_successful_background_task_is_removed(self, monkeypatch, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         mock_logger = MagicMock()
         monkeypatch.setattr("nanobot.agent.loop.logger", mock_logger)
 
@@ -123,8 +123,8 @@ class TestBackgroundTaskTracking:
         mock_logger.opt.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_failed_background_task_is_retrieved_and_logged(self, monkeypatch):
-        loop, _bus = _make_loop()
+    async def test_failed_background_task_is_retrieved_and_logged(self, monkeypatch, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         mock_logger = MagicMock()
         monkeypatch.setattr("nanobot.agent.loop.logger", mock_logger)
         failure = RuntimeError("background failure")
@@ -152,8 +152,8 @@ class TestBackgroundTaskTracking:
         )
 
     @pytest.mark.asyncio
-    async def test_cancelled_background_task_is_removed_without_error(self, monkeypatch):
-        loop, _bus = _make_loop()
+    async def test_cancelled_background_task_is_removed_without_error(self, monkeypatch, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         mock_logger = MagicMock()
         monkeypatch.setattr("nanobot.agent.loop.logger", mock_logger)
         started = asyncio.Event()
@@ -176,8 +176,8 @@ class TestBackgroundTaskTracking:
 
 
     @pytest.mark.asyncio
-    async def test_shutdown_drains_background_failure_and_logs_it_once(self, monkeypatch):
-        loop, _bus = _make_loop()
+    async def test_shutdown_drains_background_failure_and_logs_it_once(self, monkeypatch, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         loop.subagents.close = AsyncMock()
         loop._exec_session_manager.close_all = AsyncMock()
         mock_logger = MagicMock()
@@ -211,20 +211,20 @@ class TestBackgroundTaskTracking:
 
 class TestHandleStop:
     @pytest.mark.asyncio
-    async def test_stop_no_active_task(self):
+    async def test_stop_no_active_task(self, tmp_path):
         from nanobot.bus.events import InboundMessage
         from nanobot.command.builtin import cmd_stop
         from nanobot.command.router import CommandContext
 
-        loop, bus = _make_loop()
+        loop, bus = _make_loop(tmp_path)
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/stop")
         ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw="/stop", loop=loop)
         out = await cmd_stop(ctx)
         assert "没有正在运行的任务" in out.content
 
     @pytest.mark.asyncio
-    async def test_aclose_cancels_active_turn_before_resources(self):
-        loop, _bus = _make_loop()
+    async def test_aclose_cancels_active_turn_before_resources(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         events: list[str] = []
 
         async def active_turn():
@@ -249,8 +249,8 @@ class TestHandleStop:
         assert task.cancelled()
 
     @pytest.mark.asyncio
-    async def test_aclose_serializes_duplicate_cleanup(self):
-        loop, _bus = _make_loop()
+    async def test_aclose_serializes_duplicate_cleanup(self, tmp_path):
+        loop, _bus = _make_loop(tmp_path)
         entered = asyncio.Event()
         release = asyncio.Event()
         concurrent = 0
@@ -277,12 +277,12 @@ class TestHandleStop:
         assert max_concurrent == 1
 
     @pytest.mark.asyncio
-    async def test_stop_cancels_active_task(self):
+    async def test_stop_cancels_active_task(self, tmp_path):
         from nanobot.bus.events import InboundMessage
         from nanobot.command.builtin import cmd_stop
         from nanobot.command.router import CommandContext
 
-        loop, bus = _make_loop()
+        loop, bus = _make_loop(tmp_path)
         cancelled = asyncio.Event()
 
         async def slow_task():
@@ -306,12 +306,12 @@ class TestHandleStop:
         assert "已停止" in out.content
 
     @pytest.mark.asyncio
-    async def test_stop_cancels_multiple_tasks(self):
+    async def test_stop_cancels_multiple_tasks(self, tmp_path):
         from nanobot.bus.events import InboundMessage
         from nanobot.command.builtin import cmd_stop
         from nanobot.command.router import CommandContext
 
-        loop, bus = _make_loop()
+        loop, bus = _make_loop(tmp_path)
         events = [asyncio.Event(), asyncio.Event()]
 
         async def slow(idx):
@@ -335,8 +335,8 @@ class TestHandleStop:
 
 class TestDispatch:
     @pytest.mark.asyncio
-    async def test_run_logs_and_continues_after_leaked_cancelled_error(self, monkeypatch):
-        loop, bus = _make_loop()
+    async def test_run_logs_and_continues_after_leaked_cancelled_error(self, monkeypatch, tmp_path):
+        loop, bus = _make_loop(tmp_path)
         loop.aclose = AsyncMock()
         loop.auto_compact.check_expired = AsyncMock()
         warnings: list[str] = []
@@ -361,19 +361,19 @@ class TestDispatch:
         assert calls == 2
         assert any("Ignoring leaked CancelledError" in warning for warning in warnings)
 
-    def test_exec_tool_not_registered_when_disabled(self):
+    def test_exec_tool_not_registered_when_disabled(self, tmp_path):
         from nanobot.agent.tools.shell import ExecToolConfig
         from nanobot.config.schema import ToolsConfig
 
-        loop, _bus = _make_loop(tools_config=ToolsConfig(exec=ExecToolConfig(enable=False)))
+        loop, _bus = _make_loop(tmp_path, tools_config=ToolsConfig(exec=ExecToolConfig(enable=False)))
 
         assert loop.tools.get("exec") is None
 
     @pytest.mark.asyncio
-    async def test_dispatch_processes_and_publishes(self):
+    async def test_dispatch_processes_and_publishes(self, tmp_path):
         from nanobot.bus.events import InboundMessage, OutboundMessage
 
-        loop, bus = _make_loop()
+        loop, bus = _make_loop(tmp_path)
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="hello")
         loop._process_message = AsyncMock(
             return_value=OutboundMessage(channel="test", chat_id="c1", content="hi")
@@ -383,10 +383,10 @@ class TestDispatch:
         assert out.content == "hi"
 
     @pytest.mark.asyncio
-    async def test_dispatch_streaming_preserves_message_metadata(self):
+    async def test_dispatch_streaming_preserves_message_metadata(self, tmp_path):
         from nanobot.bus.events import InboundMessage
 
-        loop, bus = _make_loop()
+        loop, bus = _make_loop(tmp_path)
         msg = InboundMessage(
             channel="matrix",
             sender_id="u1",
@@ -419,10 +419,10 @@ class TestDispatch:
         assert isinstance(second.event, StreamEndEvent)
 
     @pytest.mark.asyncio
-    async def test_same_session_dispatches_serialize(self):
+    async def test_same_session_dispatches_serialize(self, tmp_path):
         from nanobot.bus.events import InboundMessage, OutboundMessage
 
-        loop, bus = _make_loop()
+        loop, bus = _make_loop(tmp_path)
         order = []
         first_started = asyncio.Event()
         release_first = asyncio.Event()

@@ -9,6 +9,7 @@ import pytest
 
 from agent.session_helpers import save_completed_subagent
 from nanobot.agent.loop import AgentLoop
+from nanobot.agent.tools.background_exec import BackgroundExec
 from nanobot.agent.turn_delivery import TurnDeliveryFactory
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -115,6 +116,7 @@ async def test_recovery_continuation_runs_without_a_sustained_goal(
 
     loop = AgentLoop.__new__(AgentLoop)
     loop.sessions = sessions
+    loop._background_exec = BackgroundExec(sessions, bus)
     loop._unified_session = False
     loop._recovery_admission = recovery
     loop._session_locks = {}

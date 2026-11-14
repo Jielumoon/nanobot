@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
+import subprocess
 import sys
 from dataclasses import replace
 from unittest.mock import MagicMock
@@ -22,6 +24,8 @@ from nanobot.session.manager import SessionManager
 
 
 def _command(source: str) -> str:
+    if sys.platform == "win32":
+        return "& " + subprocess.list2cmdline([sys.executable, "-c", source])
     return shlex.join([sys.executable, "-c", source])
 
 
@@ -56,7 +60,7 @@ async def test_background_command_result_and_isolation(tmp_path):
             again = json.loads(await status.execute(session_id=task_id))
         assert result["status"] == "failed" and result["exit_code"] == 7
         assert len(result["output"]) <= 10000
-        assert result["output"].endswith("done\n") and result["truncated_chars"] > 0
+        assert result["output"].endswith(f"done{os.linesep}") and result["truncated_chars"] > 0
         assert again["output"] == result["output"]
         with request_context(replace(ctx, session_key="weixin.bot:other")):
             assert "not found" in await status.execute(session_id=task_id)
@@ -124,7 +128,7 @@ async def test_background_completion_resumes_originating_conversation(tmp_path):
                 id="read", name="exec_session", arguments={"session_id": task_id},
             )])
         result = json.loads(kwargs["messages"][-1]["content"])
-        assert result["exit_code"] == 0 and result["output"] == "native-result\n"
+        assert result["exit_code"] == 0 and result["output"] == f"native-result{os.linesep}"
         return LLMResponse(content="命令完成，已读取结果")
 
     provider.chat_with_retry = chat

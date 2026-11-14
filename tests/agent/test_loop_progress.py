@@ -761,7 +761,7 @@ class TestToolEventProgress:
         release_first_request = asyncio.Event()
         requests: list[list[dict]] = []
         request_contexts = []
-        tool_call = ToolCallRequest(id="call1", name="custom_tool", arguments={})
+        tool_call = ToolCallRequest(id="call1", name="list_dir", arguments={})
         responses = iter([
             LLMResponse(content="Checking", tool_calls=[tool_call]),
             LLMResponse(content="The late result is ready", tool_calls=[]),

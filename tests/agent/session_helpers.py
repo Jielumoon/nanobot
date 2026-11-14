@@ -50,7 +50,7 @@ async def stop_loop(loop: AgentLoop, worker: asyncio.Task[None], *, timeout: flo
         raise
 
 
-def mock_session_manager(*_args, **_kwargs):
+def mock_session_manager(workspace, *_args, **_kwargs):
     """Model the asynchronous state boundary in scheduler-only unit tests."""
     from unittest.mock import AsyncMock, MagicMock
 
@@ -58,6 +58,7 @@ def mock_session_manager(*_args, **_kwargs):
     from nanobot.session.state import SessionState
 
     manager = MagicMock(spec=SessionManager)
+    manager.sessions_dir = workspace / "sessions"
     manager.get_or_create.side_effect = lambda key: Session(key=key)
     manager.state = MagicMock(spec=SessionState)
     manager.state.get = AsyncMock(side_effect=lambda key: manager.get_or_create(key))

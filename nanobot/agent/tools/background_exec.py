@@ -18,7 +18,7 @@ from nanobot.bus.events import InboundMessage
 from nanobot.channels.notification_routes import notification_metadata
 
 if TYPE_CHECKING:
-    from nanobot.agent.tools.exec_session import _SessionPoll
+    from nanobot.agent.tools.exec_session import SessionPoll
     from nanobot.bus.queue import MessageBus
     from nanobot.session.manager import Session, SessionManager
 
@@ -52,10 +52,10 @@ class BackgroundExecRecord(BaseModel):
     event_state: Literal["pending", "consumed", "discarded"] = "pending"
 
     def public_result(self, max_output_chars: int) -> str:
-        from nanobot.agent.tools.exec_session import _truncate_output
+        from nanobot.agent.tools.exec_session import truncate_output
 
         data = self.model_dump(exclude={"session_key", "session_generation", "route_metadata"})
-        data["output"], omitted = _truncate_output(self.output, max_output_chars)
+        data["output"], omitted = truncate_output(self.output, max_output_chars)
         data["truncated_chars"] += omitted
         data["session_id"] = self.task_id
         # 渠道 outbox 独立记录 pending/sent/failed/unknown；消费事件不代表送达。
@@ -183,9 +183,9 @@ class BackgroundExec:
             await self._store(lambda db: self._save(db, record))
             async with asyncio.timeout(timeout_s):
                 output, result, failed = await operation
-            from nanobot.agent.tools.exec_session import MAX_OUTPUT_CHARS, _truncate_output
+            from nanobot.agent.tools.exec_session import MAX_OUTPUT_CHARS, truncate_output
 
-            record.output, record.truncated_chars = _truncate_output(output, MAX_OUTPUT_CHARS)
+            record.output, record.truncated_chars = truncate_output(output, MAX_OUTPUT_CHARS)
             record.mcp_result = result
             record.status = "failed" if failed else "succeeded"
             record.finish_reason = "mcp_error" if failed else "mcp_result"
@@ -231,7 +231,7 @@ class BackgroundExec:
             raise KeyError(task_id)
         return record
 
-    async def update(self, task_id: str, poll: _SessionPoll, *, terminal: bool) -> BackgroundExecRecord:
+    async def update(self, task_id: str, poll: SessionPoll, *, terminal: bool) -> BackgroundExecRecord:
         def update(db: sqlite3.Connection) -> BackgroundExecRecord:
             record = self._read(db, task_id)
             if record.status not in _ACTIVE:

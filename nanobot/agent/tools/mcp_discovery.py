@@ -35,42 +35,48 @@ class MCPToolRegistry(ToolRegistry):
         session: Session | None = None, persist: bool = True,
     ):
         super().__init__()
-        self._catalog = catalog
+        self.catalog = catalog
         self._sessions = sessions
         self._session = session
         self._persist = persist and session is not None
-        self._disabled = session.policy.disabled_tools if session else frozenset()
-        self._loaded = set(session.metadata.get(MCP_LOADED_TOOLS_KEY, [])) if session else set()
+        self._disabled: frozenset[str] = session.policy.disabled_tools if session else frozenset()
+        self._loaded: set[str] = set(session.metadata.get(MCP_LOADED_TOOLS_KEY, [])) if session else set()
         self._search = _MCPToolSearch(self)
 
-    def _mcp_names(self) -> list[str]:
+    def mcp_names(self) -> list[str]:
         return [
-            name for name in self._catalog.tool_names
+            name for name in self.catalog.tool_names
             if name.startswith("mcp_") and name not in self._disabled
         ]
 
     def get(self, name: str) -> Tool | None:
         if name in self._disabled:
             return None
-        if name == self._search.name and self._mcp_names():
+        if name == self._search.name and self.mcp_names():
             return self._search
         if name.startswith("mcp_") and name not in self._loaded:
             return None
-        return self._catalog.get(name)
+        return self.catalog.get(name)
 
     @property
     def tool_names(self) -> list[str]:
         names = [
-            name for name in self._catalog.tool_names
+            name for name in self.catalog.tool_names
             if name not in self._disabled and (not name.startswith("mcp_") or name in self._loaded)
         ]
-        if self._mcp_names() and self._search.name not in self._disabled:
+        if self.mcp_names() and self._search.name not in self._disabled:
             names.append(self._search.name)
         return names
 
     def get_definitions(self) -> list[dict[str, Any]]:
-        names = sorted(self.tool_names, key=lambda name: (name.startswith("mcp_"), name))
-        return [tool.to_schema() for name in names if (tool := self.get(name)) is not None]
+        names = set(self.tool_names)
+        definitions = [
+            schema for schema in self.catalog.get_definitions()
+            if self._schema_name(schema) in names
+        ]
+        if self._search.name in names:
+            definitions.append(self._search.to_schema())
+        return definitions
 
     def _suggest_name(self, name: str) -> str | None:
         key = self._lookup_key(name)
@@ -78,7 +84,7 @@ class MCPToolRegistry(ToolRegistry):
         return matches[0] if len(matches) == 1 else None
 
     def get_runtime_context_providers(self) -> list[RuntimeContextProvider]:
-        providers = []
+        providers: list[RuntimeContextProvider] = []
         for name in sorted(self.tool_names):
             tool = self.get(name)
             if tool is not None and (provider := tool.runtime_context_provider()) is not None:
@@ -87,8 +93,13 @@ class MCPToolRegistry(ToolRegistry):
 
     def prepare_call(self, name: str, params: Any) -> tuple[Tool | None, Any, str | None]:
         if name != self._search.name and self.get(name) is not None:
-            return self._catalog.prepare_call(name, params)
+            return self.catalog.prepare_call(name, params)
         return super().prepare_call(name, params)
+
+    async def execute(self, name: str, params: Any) -> Any:
+        if name != self._search.name and self.get(name) is not None:
+            return await self.catalog.execute(name, params)
+        return await super().execute(name, params)
 
     def __len__(self) -> int:
         return len(self.tool_names)
@@ -102,8 +113,8 @@ class MCPToolRegistry(ToolRegistry):
             assert self._session is not None
 
             def merge(metadata: dict[str, Any]) -> list[str]:
-                loaded = set(metadata.get(MCP_LOADED_TOOLS_KEY, [])) | names
-                metadata[MCP_LOADED_TOOLS_KEY] = sorted(loaded.intersection(self._mcp_names()))
+                loaded: set[str] = set(metadata.get(MCP_LOADED_TOOLS_KEY, [])) | names
+                metadata[MCP_LOADED_TOOLS_KEY] = sorted(loaded.intersection(self.mcp_names()))
                 return metadata[MCP_LOADED_TOOLS_KEY]
 
             loaded, _ = await self._sessions.state.mutate_metadata(
@@ -147,14 +158,14 @@ class _MCPToolSearch(Tool):
     def exclusive(self) -> bool:
         return True
 
-    async def execute(self, query: str, limit: int = 5, **kwargs: Any) -> str:
+    async def execute(self, *, query: str, limit: int = 5, **kwargs: Any) -> str:
         query = query.strip()
         terms = _terms(query)
         if not terms:
             return ToolResult.error("请输入工具名或用途关键词。")
-        matches = []
-        for name in self._view._mcp_names():
-            tool = self._view._catalog.get(name)
+        matches: list[tuple[bool, int, int, str, Tool]] = []
+        for name in self._view.mcp_names():
+            tool = self._view.catalog.get(name)
             assert tool is not None
             name_terms = _terms(name)
             text_terms = _terms(tool.description + " " + json.dumps(tool.parameters, ensure_ascii=False))

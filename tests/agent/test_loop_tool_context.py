@@ -7,6 +7,7 @@ import pytest
 
 from nanobot.agent.context import TranscriptInput
 from nanobot.agent.loop import AgentLoop
+from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.context import (
     RequestContext,
     bind_request_context,
@@ -22,8 +23,10 @@ from nanobot.providers.base import LLMResponse, ToolCallRequest
 from nanobot.session.turn_continuation import INTERNAL_CONTINUATION_META
 
 
-class _ContextRecordingTool:
+class _ContextRecordingTool(Tool):
     name = "cron"
+    description = "记录工具调用上下文。"
+    parameters = {"type": "object", "properties": {}}
     concurrency_safe = False
 
     def __init__(self) -> None:
@@ -43,23 +46,13 @@ class _ContextRecordingTool:
         return "created"
 
 
-class _Tools:
+class _Tools(ToolRegistry):
     def __init__(self, tool: _ContextRecordingTool) -> None:
-        self.tool = tool
-
-    @property
-    def tool_names(self) -> list[str]:
-        return ["cron"]
-
-    def get(self, name: str):
-        return self.tool if name == "cron" else None
+        super().__init__()
+        self.register(tool)
 
     def get_definitions(self) -> list:
         return []
-
-    def prepare_call(self, name: str, arguments: dict):
-        return (self.tool, arguments, None) if name == "cron" else (None, arguments, None)
-
 
 def test_loop_registers_default_tools_in_injected_registry(tmp_path: Path) -> None:
     provider = MagicMock()

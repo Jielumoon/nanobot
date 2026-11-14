@@ -61,7 +61,7 @@ def test_exec_tool_descriptions_are_concise() -> None:
     assert "max_runtime" in exec_description
     assert "mutually exclusive" in exec_description
     assert len(exec_description) < 160
-    assert ExecSessionTool().description == "Manage a session returned by exec."
+    assert ExecSessionTool().description == "读取 exec 会话或后台任务的状态与结果。后台 ID 立即返回快照；terminate 终止命令进程树或取消本地 MCP 等待，不确认远端任务停止。"
     assert ListExecSessionsTool().description == "List active exec sessions."
 
     exec_parameters = ExecTool().parameters["properties"]
@@ -83,6 +83,7 @@ def test_exec_tool_descriptions_are_concise() -> None:
         "wait_for",
         "until_exit",
         "timeout_ms",
+        "max_output_chars",
     }
     assert "within timeout_ms" in session_parameters["until_exit"]["description"]
     assert "wait_for" in session_parameters["timeout_ms"]["description"]

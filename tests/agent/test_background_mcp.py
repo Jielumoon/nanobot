@@ -31,7 +31,7 @@ async def test_discovered_t3_background_wait_resumes_original_session(tmp_path):
 
     @server.tool()
     async def t3_thread_wait(
-        threadId: str, runId: str | None = None, timeoutMs: int = 60000,
+        threadId: str, runId: str | None = None, timeoutMs: int = 60000,  # noqa: N803
     ) -> types.CallToolResult:
         waits.append((threadId, runId))
         remote_started.set()

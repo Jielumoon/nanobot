@@ -46,7 +46,7 @@ FinishReason = Literal[
 
 
 @dataclass(slots=True)
-class _SessionPoll:
+class SessionPoll:
     output: str
     done: bool
     exit_code: int | None
@@ -350,7 +350,7 @@ class _ExecSession:
         *,
         stdin_closed: bool = False,
         consume: bool = True,
-    ) -> _SessionPoll:
+    ) -> SessionPoll:
         if yield_time_ms > 0 and not self._completion_task.done():
             await asyncio.wait(
                 {self._completion_task}, timeout=min(yield_time_ms, MAX_YIELD_MS) / 1000,
@@ -368,9 +368,9 @@ class _ExecSession:
         if stderr:
             output_parts.append(f"STDERR:\n{stderr}")
         output = "\n".join(output_parts)
-        output, response_truncated = _truncate_output(output, max_output_chars)
+        output, response_truncated = truncate_output(output, max_output_chars)
         now = time.monotonic()
-        return _SessionPoll(
+        return SessionPoll(
             output=output,
             done=self.finished_at is not None,
             exit_code=self.process.returncode,
@@ -469,7 +469,7 @@ class ExecSessionManager:
         stdin: int = asyncio.subprocess.PIPE,
         until_exit: bool = False,
         background: bool = False,
-    ) -> tuple[str, _SessionPoll]:
+    ) -> tuple[str, SessionPoll]:
         async with self._lock:
             if self._closed:
                 raise RuntimeError("exec session manager is closed")
@@ -502,7 +502,7 @@ class ExecSessionManager:
                 supervisor = asyncio.create_task(self._complete_background(session_id, launch))
                 self._background_tasks[session_id] = supervisor
                 supervisor.add_done_callback(lambda task: self._background_done(session_id, task))
-                return session_id, _SessionPoll(output="", done=False, exit_code=None)
+                return session_id, SessionPoll(output="", done=False, exit_code=None)
         try:
             session = await launch
             if until_exit:
@@ -540,14 +540,14 @@ class ExecSessionManager:
             poll = await session.poll(0, MAX_OUTPUT_CHARS, consume=False)
         except asyncio.CancelledError:
             # 只有启动任务会被所有者/显式取消；已返回 ID 的监督任务不依附前台回合。
-            poll = _SessionPoll(
+            poll = SessionPoll(
                 output="", done=True, exit_code=None,
                 finish_reason="shutdown" if self._closed else "cancelled",
             )
         except Exception as exc:
             if session is not None and session.has_pending_work:
                 await session.kill("execution_error")
-            poll = _SessionPoll(
+            poll = SessionPoll(
                 output="", done=True, exit_code=None,
                 finish_reason="shutdown" if self._closed else "execution_error",
                 output_incomplete=True, execution_error=str(exc),
@@ -630,7 +630,7 @@ class ExecSessionManager:
         yield_time_ms: int,
         max_output_chars: int,
         owner_session_key: str | None = None,
-    ) -> _SessionPoll:
+    ) -> SessionPoll:
         async with self._lock:
             self._cleanup_finished_locked()
             session = self._sessions.get(session_id)
@@ -796,7 +796,7 @@ def clamp_session_int(value: int | None, default: int, minimum: int, maximum: in
     return min(max(value, minimum), maximum)
 
 
-def _truncate_output(output: str, max_output_chars: int) -> tuple[str, int]:
+def truncate_output(output: str, max_output_chars: int) -> tuple[str, int]:
     if len(output) <= max_output_chars:
         return output, 0
     head_chars = max_output_chars // 2
@@ -805,7 +805,7 @@ def _truncate_output(output: str, max_output_chars: int) -> tuple[str, int]:
     return output[:head_chars] + output[-tail_chars:], omitted
 
 
-def format_session_poll(session_id: str, poll: _SessionPoll) -> str:
+def format_session_poll(session_id: str, poll: SessionPoll) -> str:
     parts = [poll.output] if poll.output else []
     if poll.truncated_chars:
         parts.append(f"({poll.truncated_chars:,} chars truncated from output)")
